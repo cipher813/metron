@@ -26,9 +26,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="portfolio-analytics-app",
+    title="Metron",
     version="0.0.1",
-    summary="Institutional-grade portfolio analytics — no AI, no ads, no advice, read-only.",
+    summary="Portfolio analytics, measured — no AI, no ads, no advice, read-only (public tier).",
     lifespan=lifespan,
 )
 

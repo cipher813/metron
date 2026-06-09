@@ -1,12 +1,14 @@
-# portfolio-analytics-app *(working name — final name is a parked decision)*
+# Metron
 
-The public, multi-tenant SaaS for institutional-grade portfolio analytics on real
-accounts. **No AI, no ads/trackers, no advice, read-only.**
+**Portfolio analytics, measured.** The Nous Ergon multi-tenant SaaS for
+institutional-grade portfolio analytics on real accounts — at `metron.nousergon.ai`.
+**No AI, no ads/trackers, no advice, read-only.**
 
-This repo is the **public product** from the commercialization plan
-(`robodashboard/private/commercialization-plan-260609.md`). The personal Streamlit
-RoboDashboard stays separate as the dogfood/validation deployment. Both consume the
-shared [`portfolio-analytics`](../portfolio-analytics) engine.
+This **private** repo is the commercial product from the commercialization plan
+(`robodashboard/private/commercialization-plan-260609.md`). It is the **app** half of
+an open-core split: it depends on the **public** [`portfolio-analytics`](../portfolio-analytics)
+engine (MIT). The personal Streamlit RoboDashboard stays a separate repo, untouched,
+as the dogfood deployment and a future second consumer of the same engine.
 
 ## Status — PH0 scaffolding
 

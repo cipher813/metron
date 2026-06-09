@@ -1,4 +1,5 @@
-# portfolio-analytics-app — public multi-tenant portfolio-analytics SaaS (backend).
+# Metron — public multi-tenant portfolio-analytics SaaS (backend).
+# Nous Ergon product; lives at metron.nousergon.ai. "Portfolio analytics, measured."
 #
 # PH0 scaffolding: FastAPI service wrapping the shared `portfolio-analytics` engine
 # + the multi-tenant Postgres schema. Dev on SQLite (no vendor cost); prod on Postgres.
@@ -8,9 +9,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "portfolio-analytics-app"
+name = "metron"
 version = "0.0.1"
-description = "Public multi-tenant portfolio-analytics SaaS — FastAPI backend over the portfolio-analytics engine."
+description = "Metron — public multi-tenant portfolio-analytics SaaS. FastAPI backend over the portfolio-analytics engine. No AI, no ads, no advice, read-only."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "UNLICENSED" }
