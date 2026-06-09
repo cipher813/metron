@@ -19,14 +19,16 @@ keeps the holding reconciled to the transaction history by construction.
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from api.db import models
 from portfolio_analytics.domain.ledger import Transaction, TxnType, build_ledger
+from portfolio_analytics.domain.realized import YearlyIncome, summarize_income_by_year
 
 
 @dataclass
@@ -175,3 +177,84 @@ def transactions(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID
         )
         for row, ticker in _portfolio_rows(session, tenant_id, portfolio_id)
     ]
+
+
+@dataclass
+class AccountInfo:
+    broker: str
+    external_id: str
+    name: str
+    currency: str
+
+
+@dataclass
+class PortfolioSummary:
+    base_currency: str
+    n_accounts: int
+    n_holdings: int
+    total_cost_basis: float
+    realized_st: float
+    realized_lt: float
+    dividends: float
+    interest: float
+
+    @property
+    def realized_total(self) -> float:
+        return self.realized_st + self.realized_lt
+
+    @property
+    def taxable_income(self) -> float:
+        return self.realized_total + self.dividends + self.interest
+
+
+def income(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID) -> list[YearlyIncome]:
+    """Per-year realized taxable income — realized ST/LT gains + dividends + interest.
+
+    Realized gains come from the FIFO ledger; dividends/interest are summed directly
+    from the cash transactions (they never enter the lot ledger). Price-free — fully
+    determined by the transaction history. Newest year first."""
+    rows = _portfolio_rows(session, tenant_id, portfolio_id)
+    ledger = build_ledger([_to_engine_txn(row, ticker) for row, ticker in rows])
+    dividends: dict[int, float] = defaultdict(float)
+    interest: dict[int, float] = defaultdict(float)
+    for row, _ticker in rows:
+        if row.txn_type == TxnType.DIVIDEND.value:
+            dividends[row.trade_date.year] += float(row.amount)
+        elif row.txn_type == TxnType.INTEREST.value:
+            interest[row.trade_date.year] += float(row.amount)
+    return summarize_income_by_year(ledger.realized, dict(dividends), dict(interest))
+
+
+def accounts(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID) -> list[AccountInfo]:
+    """The portfolio's connected accounts (one row per broker account)."""
+    rows = session.scalars(
+        select(models.Account)
+        .where(models.Account.tenant_id == tenant_id, models.Account.portfolio_id == portfolio_id)
+        .order_by(models.Account.broker, models.Account.external_id)
+    ).all()
+    return [AccountInfo(broker=a.broker, external_id=a.external_id, name=a.name or "", currency=a.currency) for a in rows]
+
+
+def summary(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID) -> PortfolioSummary:
+    """Portfolio-level totals for the home view — all price-free (cost basis, realized,
+    income). Market value / unrealized P&L are intentionally absent until a licensed
+    price feed lands (no fabricated valuations)."""
+    portfolio = session.get(models.Portfolio, portfolio_id)
+    held = holdings(session, tenant_id, portfolio_id)
+    closed = realized(session, tenant_id, portfolio_id)
+    yearly = income(session, tenant_id, portfolio_id)
+    n_accounts = session.scalar(
+        select(func.count())
+        .select_from(models.Account)
+        .where(models.Account.tenant_id == tenant_id, models.Account.portfolio_id == portfolio_id)
+    )
+    return PortfolioSummary(
+        base_currency=portfolio.base_currency if portfolio else "USD",
+        n_accounts=int(n_accounts or 0),
+        n_holdings=len(held),
+        total_cost_basis=sum(h.cost_basis for h in held),
+        realized_st=sum(r.gain for r in closed if not r.long_term),
+        realized_lt=sum(r.gain for r in closed if r.long_term),
+        dividends=sum(i.dividends for i in yearly),
+        interest=sum(i.interest for i in yearly),
+    )

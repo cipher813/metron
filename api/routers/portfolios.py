@@ -83,6 +83,42 @@ class TransactionOut(BaseModel):
     currency: str
 
 
+class IncomeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    year: int
+    realized_st: float
+    realized_lt: float
+    dividends: float
+    interest: float
+    net_capital_gains: float
+    taxable_income: float
+
+
+class AccountOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    broker: str
+    external_id: str
+    name: str
+    currency: str
+
+
+class SummaryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    base_currency: str
+    n_accounts: int
+    n_holdings: int
+    total_cost_basis: float
+    realized_st: float
+    realized_lt: float
+    realized_total: float
+    dividends: float
+    interest: float
+    taxable_income: float
+
+
 class SkipOut(BaseModel):
     ref: str       # human locator: "line 4" (CSV) | "fitid T123" (OFX)
     reason: str
@@ -279,3 +315,30 @@ def get_realized(
     session: Session = Depends(get_session),
 ) -> list[analytics.RealizedLot]:
     return analytics.realized(session, portfolio.tenant_id, portfolio.id)
+
+
+@router.get("/{portfolio_id}/income", response_model=list[IncomeOut])
+def get_income(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> list:
+    """Per-year realized income (cap gains ST/LT + dividends + interest), newest first."""
+    return analytics.income(session, portfolio.tenant_id, portfolio.id)
+
+
+@router.get("/{portfolio_id}/accounts", response_model=list[AccountOut])
+def get_accounts(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> list[analytics.AccountInfo]:
+    return analytics.accounts(session, portfolio.tenant_id, portfolio.id)
+
+
+@router.get("/{portfolio_id}/summary", response_model=SummaryOut)
+def get_summary(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> analytics.PortfolioSummary:
+    """Portfolio home totals — all price-free (cost basis, realized, income). No market
+    value / unrealized P&L until a licensed price feed lands."""
+    return analytics.summary(session, portfolio.tenant_id, portfolio.id)
