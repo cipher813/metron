@@ -160,3 +160,27 @@ class PriceBar(Base):
     bar_date: Mapped[date] = mapped_column(index=True)
     close: Mapped[float] = mapped_column(Numeric(28, 10))
     currency: Mapped[str] = mapped_column(String(3), default="USD")
+
+
+class NavSnapshot(Base):
+    """A dated portfolio NAV snapshot — the forward-recorded performance series.
+
+    Like robodashboard's snapshot model: market value can't be reconstructed for the
+    past from cost basis alone, so NAV history accumulates one day at a time as the
+    user refreshes prices (idempotent per day). ``external_flow`` is that day's net
+    deposit/withdrawal (portfolio perspective: + in, − out) so time-weighted return can
+    neutralize cash-flow timing; ``spy_close`` is captured for the eventual NAV-vs-SPY
+    benchmark. Tenant-scoped."""
+
+    __tablename__ = "nav_snapshots"
+    __table_args__ = (UniqueConstraint("tenant_id", "portfolio_id", "snap_date", name="uq_navsnapshot_day"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id", ondelete="CASCADE"), index=True)
+    snap_date: Mapped[date] = mapped_column(index=True)
+    nav: Mapped[float] = mapped_column(Numeric(28, 10))
+    cost_basis: Mapped[float] = mapped_column(Numeric(28, 10), default=0)
+    external_flow: Mapped[float] = mapped_column(Numeric(28, 10), default=0)
+    spy_close: Mapped[float | None] = mapped_column(Numeric(28, 10), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

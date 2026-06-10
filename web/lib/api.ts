@@ -87,6 +87,28 @@ export type Summary = {
 export type PriceRefreshResult = {
   symbols_requested: number;
   prices_updated: number;
+  snapshot_recorded: boolean;
+};
+
+export type PerfPoint = {
+  snap_date: string;
+  nav: number;
+  external_flow: number;
+  spy_close: number | null;
+};
+
+export type Performance = {
+  n_snapshots: number;
+  first_date: string | null;
+  last_date: string | null;
+  days: number;
+  latest_nav: number | null;
+  latest_cost_basis: number | null;
+  net_contributions: number;
+  cumulative_return: number | null;
+  twr: number | null;
+  annualized_twr: number | null;
+  points: PerfPoint[];
 };
 
 export class MetronApiError extends Error {
@@ -120,6 +142,8 @@ export const getRealized = (tenantId: string, id: string) =>
   get<RealizedLot[]>(tenantId, `/portfolios/${id}/realized`);
 export const getAccountDetail = (tenantId: string, id: string, accountId: string) =>
   get<AccountDetail>(tenantId, `/portfolios/${id}/accounts/${accountId}`);
+export const getPerformance = (tenantId: string, id: string) =>
+  get<Performance>(tenantId, `/portfolios/${id}/performance`);
 
 /** Create a portfolio in the user's workspace (auto-provisions the tenant on the backend). */
 export async function createPortfolio(tenantId: string, name: string): Promise<Portfolio> {
