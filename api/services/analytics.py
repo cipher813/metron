@@ -108,15 +108,21 @@ def _to_engine_txn(row: models.Transaction, ticker: str | None) -> Transaction:
     )
 
 
+def engine_transactions(
+    session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, account_id: uuid.UUID | None = None
+) -> list[Transaction]:
+    """The portfolio's transactions as engine ``Transaction`` objects, oldest first.
+
+    Exposed for historical reconstruction: replaying ``build_ledger`` over the subset
+    with ``when <= d`` gives the positions held as of date ``d``."""
+    return [_to_engine_txn(row, ticker) for row, ticker in _portfolio_rows(session, tenant_id, portfolio_id, account_id)]
+
+
 def load_ledger(
     session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, account_id: uuid.UUID | None = None
 ):
     """Build the FIFO ledger for a portfolio (or a single account) from its transactions."""
-    txns = [
-        _to_engine_txn(row, ticker)
-        for row, ticker in _portfolio_rows(session, tenant_id, portfolio_id, account_id)
-    ]
-    return build_ledger(txns)
+    return build_ledger(engine_transactions(session, tenant_id, portfolio_id, account_id))
 
 
 def _position_rows(

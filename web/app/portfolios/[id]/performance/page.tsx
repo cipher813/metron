@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getPerformance, getSummary, MetronApiError } from "@/lib/api";
 import { isoDate, money, percent, signClass, signedMoney } from "@/lib/format";
 import { Empty, Section, StatCard, Table } from "@/components/ui";
+import { BuildHistory } from "@/components/build-history";
 import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -32,8 +33,12 @@ export default async function PerformancePage({ params }: { params: { id: string
 
       <h1 className="mt-3 text-lg font-semibold">Performance</h1>
       <p className="text-sm text-muted">
-        NAV history is recorded forward each time you refresh prices — metrics appear once there are at least two days.
+        NAV records forward each time you refresh prices. To get instant history, build it from past prices.
       </p>
+
+      <div className="mt-3">
+        <BuildHistory portfolioId={id} />
+      </div>
 
       {hasMetrics ? (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">

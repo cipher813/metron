@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, timedelta
 
 from alpha_engine_lib.quant.returns import ValuationPoint, annualize, cumulative_return, time_weighted_return
 from sqlalchemy import select
@@ -22,8 +22,9 @@ from sqlalchemy.orm import Session
 
 from api.db import models
 from api.services import analytics
-from portfolio_analytics.domain.ledger import TxnType
-from portfolio_analytics.prices import fetch_latest_closes
+from api.services import prices as price_service
+from portfolio_analytics.domain.ledger import TxnType, build_ledger
+from portfolio_analytics.prices import ClosePoint, HistorySource, fetch_latest_closes
 
 
 def _external_flow_on(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, when: date) -> float:
@@ -60,25 +61,43 @@ def record_snapshot(
     cost_basis = sum(h.cost_basis for h in held)
     flow = _external_flow_on(session, tenant_id, portfolio_id, today)
     spy_point = fetch_latest_closes(["SPY"], source=source).get("SPY")
-    spy_close = spy_point.close if spy_point else None
+    row = _upsert_snapshot(
+        session, tenant_id, portfolio_id, today,
+        nav=nav, cost_basis=cost_basis, flow=flow, spy_close=spy_point.close if spy_point else None,
+    )
+    session.commit()
+    session.refresh(row)
+    return row
 
+
+def _upsert_snapshot(
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    when: date,
+    *,
+    nav: float,
+    cost_basis: float,
+    flow: float,
+    spy_close: float | None,
+) -> models.NavSnapshot:
+    """Find-or-create the (portfolio, day) snapshot and set its fields. Does NOT commit
+    — the caller batches the commit (one per refresh, one per reconstruction run)."""
     row = session.scalars(
         select(models.NavSnapshot).where(
             models.NavSnapshot.tenant_id == tenant_id,
             models.NavSnapshot.portfolio_id == portfolio_id,
-            models.NavSnapshot.snap_date == today,
+            models.NavSnapshot.snap_date == when,
         )
     ).first()
     if row is None:
-        row = models.NavSnapshot(tenant_id=tenant_id, portfolio_id=portfolio_id, snap_date=today)
+        row = models.NavSnapshot(tenant_id=tenant_id, portfolio_id=portfolio_id, snap_date=when)
         session.add(row)
     row.nav = nav
     row.cost_basis = cost_basis
     row.external_flow = flow
     if spy_close is not None:
         row.spy_close = spy_close
-    session.commit()
-    session.refresh(row)
     return row
 
 
@@ -147,3 +166,95 @@ def performance(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID)
     if summary.twr is not None and summary.days > 0:
         summary.annualized_twr = annualize(summary.twr, summary.days)
     return summary
+
+
+# --- historical reconstruction --------------------------------------------
+#
+# Forward-recording (record_snapshot) starts empty. Reconstruction seeds the series
+# from history: backfill daily closes over the ledger span, then for a set of
+# valuation dates replay the ledger to that date and value the positions held then at
+# that date's close. Gives instant multi-year history where forward-recording would
+# take years to accumulate.
+
+
+def _asof_close(series: list[ClosePoint] | None, when: date) -> float | None:
+    """Most recent close on or before ``when`` (carry-forward over non-trading days).
+    ``series`` is ascending by date. None if nothing is on/before ``when``."""
+    if not series:
+        return None
+    chosen: float | None = None
+    for point in series:
+        if point.bar_date <= when:
+            chosen = point.close
+        else:
+            break
+    return chosen
+
+
+def _month_ends(start: date, end: date) -> list[date]:
+    """Last calendar day of each month within ``[start, end]`` (inclusive)."""
+    out: list[date] = []
+    year, month = start.year, start.month
+    while (year, month) <= (end.year, end.month):
+        nxt = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        last = nxt - timedelta(days=1)
+        if start <= last <= end:
+            out.append(last)
+        year, month = (year + 1, 1) if month == 12 else (year, month + 1)
+    return out
+
+
+def _valuation_dates(first: date, today: date, flow_dates: list[date]) -> list[date]:
+    """Dates to value the portfolio at: month-ends (a smooth curve) + every external-flow
+    date (so TWR sub-periods break cleanly on cash movements) + the endpoints."""
+    dates = {first, today, *_month_ends(first, today), *(d for d in flow_dates if first <= d <= today)}
+    return sorted(dates)
+
+
+def reconstruct_snapshots(
+    session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, *, today: date, source: HistorySource | None = None
+) -> int:
+    """Seed the NAV snapshot series from history: backfill daily closes over the ledger
+    span, then value the portfolio at each valuation date by replaying the ledger to
+    that date. Idempotent (upserts per day). Returns the number of snapshots written.
+
+    A position whose ticker has no cached history on a date is excluded from that date's
+    NAV (never fabricated); a date with nothing priced is skipped entirely."""
+    txns = analytics.engine_transactions(session, tenant_id, portfolio_id)
+    if not txns:
+        return 0
+    first = min(t.when for t in txns)
+    symbols = sorted({t.ticker for t in txns if t.ticker})
+
+    # Cache a SPY security so its history backfills for the benchmark, then backfill all.
+    price_service.ensure_security(session, "SPY")
+    price_service.backfill_prices(session, [*symbols, "SPY"], first, today, source=source)
+    history = price_service.close_history_by_symbol(session, [*symbols, "SPY"])
+    spy_series = history.get("SPY")
+
+    flow_dates = [t.when for t in txns if t.type in (TxnType.DEPOSIT, TxnType.WITHDRAWAL)]
+    written = 0
+    for when in _valuation_dates(first, today, flow_dates):
+        ledger = build_ledger([t for t in txns if t.when <= when])
+        nav = 0.0
+        cost_basis = 0.0
+        valued_any = False
+        for ticker in ledger.open_lots:
+            shares, avg_cost = ledger.position(ticker)
+            if shares <= 0:
+                continue
+            cost_basis += shares * avg_cost
+            px = _asof_close(history.get(ticker), when)
+            if px is not None:
+                nav += shares * px
+                valued_any = True
+        if not valued_any:
+            continue  # nothing priced as-of this date → no fabricated NAV
+        flow = _external_flow_on(session, tenant_id, portfolio_id, when)
+        _upsert_snapshot(
+            session, tenant_id, portfolio_id, when,
+            nav=nav, cost_basis=cost_basis, flow=flow, spy_close=_asof_close(spy_series, when),
+        )
+        written += 1
+    session.commit()
+    return written

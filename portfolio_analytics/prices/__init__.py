@@ -5,6 +5,12 @@ The engine is price-source-agnostic: ``fetch_latest_closes`` takes an injectable
 licensed feed in the public multi-tenant tier without touching callers.
 """
 
-from portfolio_analytics.prices.yfinance_source import ClosePoint, PriceSource, fetch_latest_closes
+from portfolio_analytics.prices.yfinance_source import (
+    ClosePoint,
+    HistorySource,
+    PriceSource,
+    fetch_close_history,
+    fetch_latest_closes,
+)
 
-__all__ = ["ClosePoint", "PriceSource", "fetch_latest_closes"]
+__all__ = ["ClosePoint", "HistorySource", "PriceSource", "fetch_close_history", "fetch_latest_closes"]
