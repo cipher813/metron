@@ -443,6 +443,19 @@ def get_performance(
     return performance.performance(session, portfolio.tenant_id, portfolio.id)
 
 
+@router.post("/{portfolio_id}/performance/reconstruct", response_model=PerformanceOut)
+def reconstruct_performance(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> performance.PerformanceSummary:
+    """Seed NAV history from past prices — backfill daily closes over the ledger span
+    and value the portfolio at each valuation date. Gives instant multi-year
+    performance instead of waiting for forward-recording to accumulate. Returns the
+    now-populated performance summary."""
+    performance.reconstruct_snapshots(session, portfolio.tenant_id, portfolio.id, today=date.today())
+    return performance.performance(session, portfolio.tenant_id, portfolio.id)
+
+
 @router.get("/{portfolio_id}/accounts/{account_id}", response_model=AccountDetailOut)
 def get_account_detail(
     account: models.Account = Depends(_owned_account),

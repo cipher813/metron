@@ -145,6 +145,19 @@ export const getAccountDetail = (tenantId: string, id: string, accountId: string
 export const getPerformance = (tenantId: string, id: string) =>
   get<Performance>(tenantId, `/portfolios/${id}/performance`);
 
+/** Seed NAV history from past prices (reconstruction). Returns the populated summary. */
+export async function reconstructPerformance(tenantId: string, id: string): Promise<Performance> {
+  const res = await fetch(`${API_URL}/portfolios/${id}/performance/reconstruct`, {
+    method: "POST",
+    headers: { "X-Tenant-Id": tenantId },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new MetronApiError(res.status, `reconstruct → ${res.status}`);
+  }
+  return res.json() as Promise<Performance>;
+}
+
 /** Create a portfolio in the user's workspace (auto-provisions the tenant on the backend). */
 export async function createPortfolio(tenantId: string, name: string): Promise<Portfolio> {
   const res = await fetch(`${API_URL}/portfolios`, {

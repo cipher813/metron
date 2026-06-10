@@ -12,12 +12,19 @@ caller shows cost basis only rather than a guessed market value.
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import models
-from portfolio_analytics.prices import ClosePoint, PriceSource, fetch_latest_closes
+from portfolio_analytics.prices import (
+    ClosePoint,
+    HistorySource,
+    PriceSource,
+    fetch_close_history,
+    fetch_latest_closes,
+)
 
 
 def _security_ids_by_symbol(session: Session, symbols: list[str]) -> dict[str, uuid.UUID]:
@@ -88,4 +95,79 @@ def latest_close_by_symbol(session: Session, symbols: list[str]) -> dict[str, Cl
     for symbol, bar_date, close in rows:
         if symbol not in out:  # rows are newest-first per symbol → first is latest
             out[symbol] = ClosePoint(bar_date=bar_date, close=float(close))
+    return out
+
+
+def ensure_security(session: Session, symbol: str, *, currency: str = "USD") -> uuid.UUID:
+    """Get-or-create a global Security id for a symbol. Used to cache a benchmark
+    (e.g. SPY) that isn't a held position so its history can live in ``price_bars``."""
+    row = session.scalars(
+        select(models.Security).where(models.Security.symbol == symbol).order_by(models.Security.id)
+    ).first()
+    if row is None:
+        row = models.Security(symbol=symbol, name=symbol, currency=currency)
+        session.add(row)
+        session.flush()
+    return row.id
+
+
+def backfill_prices(
+    session: Session, symbols: list[str], start: date, end: date, *, source: HistorySource | None = None
+) -> int:
+    """Backfill the daily close history for symbols over ``[start, end]`` into the
+    cache. Idempotent: existing (security, day) bars are left as-is; only missing days
+    are inserted. Symbols without a securities row (and unresolvable ones) are skipped.
+    Returns the number of bars inserted."""
+    symbols = [s for s in dict.fromkeys(symbols) if s]
+    if not symbols or start > end:
+        return 0
+    history = fetch_close_history(symbols, start, end, source=source)
+    if not history:
+        return 0
+    sec_by_symbol = _security_ids_by_symbol(session, list(history))
+    if not sec_by_symbol:
+        return 0
+    # Preload the (security, day) bars already cached for these securities so the
+    # backfill is one query + plain inserts, not a select-per-day.
+    sec_ids = list(sec_by_symbol.values())
+    existing = {
+        (sid, bd)
+        for sid, bd in session.execute(
+            select(models.PriceBar.security_id, models.PriceBar.bar_date).where(
+                models.PriceBar.security_id.in_(sec_ids),
+                models.PriceBar.bar_date >= start,
+                models.PriceBar.bar_date <= end,
+            )
+        ).all()
+    }
+    inserted = 0
+    for symbol, series in history.items():
+        sec_id = sec_by_symbol.get(symbol)
+        if sec_id is None:
+            continue
+        for point in series:
+            if (sec_id, point.bar_date) in existing:
+                continue
+            session.add(models.PriceBar(security_id=sec_id, bar_date=point.bar_date, close=point.close))
+            existing.add((sec_id, point.bar_date))
+            inserted += 1
+    session.commit()
+    return inserted
+
+
+def close_history_by_symbol(session: Session, symbols: list[str]) -> dict[str, list[ClosePoint]]:
+    """Full cached close series per symbol, ascending by date — for as-of valuation
+    during reconstruction. Absent symbols are omitted."""
+    symbols = [s for s in dict.fromkeys(symbols) if s]
+    if not symbols:
+        return {}
+    rows = session.execute(
+        select(models.Security.symbol, models.PriceBar.bar_date, models.PriceBar.close)
+        .join(models.PriceBar, models.PriceBar.security_id == models.Security.id)
+        .where(models.Security.symbol.in_(symbols))
+        .order_by(models.Security.symbol, models.PriceBar.bar_date)
+    ).all()
+    out: dict[str, list[ClosePoint]] = {}
+    for symbol, bar_date, close in rows:
+        out.setdefault(symbol, []).append(ClosePoint(bar_date=bar_date, close=float(close)))
     return out
