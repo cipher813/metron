@@ -41,7 +41,10 @@ jobs:
           set -euo pipefail
           # Pull metron to THIS commit (race-safe), metron-ops to latest main, then run the
           # box deploy script as ec2-user (it owns the venv/node_modules; sudo only for restart).
-          CMD_BODY="set -e; sudo -u ec2-user git -C /home/ec2-user/metron fetch origin --quiet && sudo -u ec2-user git -C /home/ec2-user/metron reset --hard ${GITHUB_SHA} --quiet && sudo -u ec2-user git -C /home/ec2-user/metron-ops fetch origin --quiet && sudo -u ec2-user git -C /home/ec2-user/metron-ops reset --hard origin/main --quiet && sudo -u ec2-user bash /home/ec2-user/metron/infrastructure/deploy-on-merge.sh"
+          # flock serializes against the metron-ops deploy (GHA concurrency is per-repo, so the
+          # two repos' deploys can otherwise overlap → concurrent git resets + npm builds on the
+          # shared box). The second deploy waits (≤10m) then runs with the latest code.
+          CMD_BODY="flock -w 600 /tmp/metron-deploy.lock -c 'set -e; sudo -u ec2-user git -C /home/ec2-user/metron fetch origin --quiet && sudo -u ec2-user git -C /home/ec2-user/metron reset --hard ${GITHUB_SHA} --quiet && sudo -u ec2-user git -C /home/ec2-user/metron-ops fetch origin --quiet && sudo -u ec2-user git -C /home/ec2-user/metron-ops reset --hard origin/main --quiet && sudo -u ec2-user bash /home/ec2-user/metron/infrastructure/deploy-on-merge.sh'"
           CMD_ID=$(aws ssm send-command \
             --instance-ids "${METRON_INSTANCE_ID}" \
             --document-name AWS-RunShellScript \
