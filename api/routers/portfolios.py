@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from api.db import models
 from api.db.session import get_session
-from api.services import analytics, persistence
+from api.services import analytics, performance, persistence
 from api.services import prices as price_service
 from portfolio_analytics.broker_io.csv_import import parse_transactions_csv
 from portfolio_analytics.broker_io.file_import import FileImportError, FileImportResult
@@ -147,6 +147,32 @@ class PriceRefreshOut(BaseModel):
 
     symbols_requested: int
     prices_updated: int
+    snapshot_recorded: bool
+
+
+class PerfPointOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    snap_date: date
+    nav: float
+    external_flow: float
+    spy_close: float | None
+
+
+class PerformanceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    n_snapshots: int
+    first_date: date | None
+    last_date: date | None
+    days: int
+    latest_nav: float | None
+    latest_cost_basis: float | None
+    net_contributions: float
+    cumulative_return: float | None
+    twr: float | None
+    annualized_twr: float | None
+    points: list[PerfPointOut]
 
 
 class SkipOut(BaseModel):
@@ -357,7 +383,10 @@ def refresh_prices(
     held = analytics.holdings(session, portfolio.tenant_id, portfolio.id)
     symbols = [h.ticker for h in held if h.ticker]
     updated = price_service.refresh_latest_prices(session, symbols)
-    return PriceRefreshOut(symbols_requested=len(symbols), prices_updated=updated)
+    # Record today's NAV snapshot off the freshly-cached prices (the forward-recorded
+    # performance series). None when nothing could be priced.
+    snap = performance.record_snapshot(session, portfolio.tenant_id, portfolio.id, today=date.today())
+    return PriceRefreshOut(symbols_requested=len(symbols), prices_updated=updated, snapshot_recorded=snap is not None)
 
 
 @router.get("/{portfolio_id}/holdings", response_model=list[HoldingOut])
@@ -400,6 +429,18 @@ def get_accounts(
     session: Session = Depends(get_session),
 ) -> list[analytics.AccountInfo]:
     return analytics.accounts(session, portfolio.tenant_id, portfolio.id)
+
+
+@router.get("/{portfolio_id}/performance", response_model=PerformanceOut)
+def get_performance(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> performance.PerformanceSummary:
+    """Time-weighted + cumulative return over the recorded NAV snapshot series.
+
+    History builds forward as prices are refreshed; metrics are null until ≥2
+    snapshots exist (never a fabricated number)."""
+    return performance.performance(session, portfolio.tenant_id, portfolio.id)
 
 
 @router.get("/{portfolio_id}/accounts/{account_id}", response_model=AccountDetailOut)

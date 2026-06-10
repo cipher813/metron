@@ -36,9 +36,14 @@ export default async function PortfolioPage({ params }: { params: { id: string }
         <Link href="/" className="text-sm text-muted hover:text-ink">
           ← Portfolios
         </Link>
-        <Link href={`/portfolios/${id}/transactions`} className="text-sm text-muted hover:text-ink">
-          Transactions &amp; realized →
-        </Link>
+        <div className="flex gap-4">
+          <Link href={`/portfolios/${id}/performance`} className="text-sm text-muted hover:text-ink">
+            Performance →
+          </Link>
+          <Link href={`/portfolios/${id}/transactions`} className="text-sm text-muted hover:text-ink">
+            Transactions &amp; realized →
+          </Link>
+        </div>
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
