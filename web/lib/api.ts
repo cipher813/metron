@@ -33,6 +33,28 @@ export type Account = {
   currency: string;
 };
 
+export type Transaction = {
+  trade_date: string; // ISO date
+  txn_type: string;
+  ticker: string;
+  quantity: number;
+  price: number;
+  amount: number;
+  fees: number;
+  currency: string;
+};
+
+export type RealizedLot = {
+  ticker: string;
+  open_date: string; // ISO date
+  close_date: string; // ISO date
+  quantity: number;
+  proceeds: number;
+  cost_basis: number;
+  gain: number;
+  long_term: boolean;
+};
+
 export type Summary = {
   base_currency: string;
   n_accounts: number;
@@ -71,6 +93,10 @@ export const getSummary = (tenantId: string, id: string) => get<Summary>(tenantI
 export const getHoldings = (tenantId: string, id: string) => get<Holding[]>(tenantId, `/portfolios/${id}/holdings`);
 export const getIncome = (tenantId: string, id: string) => get<IncomeYear[]>(tenantId, `/portfolios/${id}/income`);
 export const getAccounts = (tenantId: string, id: string) => get<Account[]>(tenantId, `/portfolios/${id}/accounts`);
+export const getTransactions = (tenantId: string, id: string) =>
+  get<Transaction[]>(tenantId, `/portfolios/${id}/transactions`);
+export const getRealized = (tenantId: string, id: string) =>
+  get<RealizedLot[]>(tenantId, `/portfolios/${id}/realized`);
 
 /** Create a portfolio in the user's workspace (auto-provisions the tenant on the backend). */
 export async function createPortfolio(tenantId: string, name: string): Promise<Portfolio> {

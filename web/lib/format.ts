@@ -21,6 +21,15 @@ export function quantity(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 }).format(value);
 }
 
+/** Format a date-only ISO string (YYYY-MM-DD) without Date parsing, to avoid a
+ * timezone day-shift (`new Date("2024-03-15")` is UTC midnight). */
+export function isoDate(value: string): string {
+  const [y, m, d] = value.split("-");
+  if (!y || !m || !d) return value;
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[Number(m) - 1] ?? m} ${Number(d)}, ${y}`;
+}
+
 /** Tailwind text color for a gain/loss value. */
 export function signClass(value: number): string {
   if (value > 0) return "text-positive";

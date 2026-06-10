@@ -30,9 +30,14 @@ export default async function PortfolioPage({ params }: { params: { id: string }
 
   return (
     <div>
-      <Link href="/" className="text-sm text-muted hover:text-ink">
-        ← Portfolios
-      </Link>
+      <div className="flex items-baseline justify-between">
+        <Link href="/" className="text-sm text-muted hover:text-ink">
+          ← Portfolios
+        </Link>
+        <Link href={`/portfolios/${id}/transactions`} className="text-sm text-muted hover:text-ink">
+          Transactions &amp; realized →
+        </Link>
+      </div>
 
       <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Cost basis" value={money(summary.total_cost_basis, ccy)} hint={`${summary.n_holdings} holdings`} />
