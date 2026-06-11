@@ -261,7 +261,10 @@ class InvestorPreferences(Base):
     risk_tolerance: Mapped[str | None] = mapped_column(String(20), nullable=True)  # conservative | moderate | aggressive
     objective: Mapped[str | None] = mapped_column(String(20), nullable=True)  # income | growth | balanced
     notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
-    # Comma-separated institution allowlist applied on SnapTrade sync ("all" = no
-    # filter). Null = deployment default (SNAPTRADE_INSTITUTIONS env).
-    snaptrade_institutions: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Comma-separated SnapTrade authorization ids this portfolio's sync SKIPS
+    # (linked = synced by default; exclusion = the opt-out for a broker sourced
+    # elsewhere, e.g. IBKR via Flex). Keyed by stable connection id, never by
+    # institution-name matching. (The legacy snaptrade_institutions column may
+    # still exist physically in older SQLite files; it is unmapped and unread.)
+    snaptrade_excluded_connections: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())

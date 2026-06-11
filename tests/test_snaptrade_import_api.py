@@ -86,43 +86,29 @@ def test_cross_tenant_is_404(client, personal_on, monkeypatch):
     assert r.status_code == 404
 
 
-def test_institution_allowlist_keeps_only_matching(client, personal_on, monkeypatch):
-    # Fixture accounts are all "Interactive Brokers" → allowlisting Fidelity keeps none
-    # (the no-double-count-with-Flex guard), while allowlisting IBKR keeps all 3 positions.
-    _patch_from_env(monkeypatch, _FakeReader)
+def test_excluded_connection_skipped_on_sync(client, personal_on, monkeypatch):
+    # Linked = synced by default; an excluded connection's accounts are dropped from
+    # the snapshot (exclusion keyed by stable authorization id — no name matching).
+    class _AuthReader(_FakeReader):
+        def get_accounts(self):
+            accounts = [dict(a) for a in super().get_accounts()]
+            for a in accounts:
+                a["brokerage_authorization"] = "auth-ibkr"
+            return accounts
+
+    _patch_from_env(monkeypatch, _AuthReader)
     t = str(uuid.uuid4())
 
-    monkeypatch.setattr("api.routers.portfolios.settings.snaptrade_institutions", "Fidelity")
+    # Default (nothing excluded): all 3 positions import.
     pid = _new_portfolio(client, t)
-    assert client.post(f"/portfolios/{pid}/import/snaptrade", headers=_hdr(t)).json()["positions_imported"] == 0
-    assert client.get(f"/portfolios/{pid}/holdings", headers=_hdr(t)).json() == []
+    assert client.post(f"/portfolios/{pid}/import/snaptrade", headers=_hdr(t)).json()["positions_imported"] == 3
 
-    monkeypatch.setattr("api.routers.portfolios.settings.snaptrade_institutions", "Interactive Brokers")
+    # Excluded: the connection's accounts are skipped entirely.
     pid2 = _new_portfolio(client, t)
+    client.post(f"/portfolios/{pid2}/snaptrade/connections/auth-ibkr/exclude", headers=_hdr(t))
+    assert client.post(f"/portfolios/{pid2}/import/snaptrade", headers=_hdr(t)).json()["positions_imported"] == 0
+    assert client.get(f"/portfolios/{pid2}/holdings", headers=_hdr(t)).json() == []
+
+    # Re-included: the next sync imports them again.
+    client.post(f"/portfolios/{pid2}/snaptrade/connections/auth-ibkr/include", headers=_hdr(t))
     assert client.post(f"/portfolios/{pid2}/import/snaptrade", headers=_hdr(t)).json()["positions_imported"] == 3
-
-
-def test_preference_allowlist_overrides_env(client, personal_on, monkeypatch):
-    # The portfolio's saved Settings allowlist wins over the deployment env default;
-    # "all" disables filtering entirely. Fixture accounts are "Interactive Brokers".
-    _patch_from_env(monkeypatch, _FakeReader)
-    monkeypatch.setattr("api.routers.portfolios.settings.snaptrade_institutions", "Fidelity")
-    t = str(uuid.uuid4())
-
-    # Env-only: the Fidelity default drops every IBKR fixture account.
-    pid = _new_portfolio(client, t)
-    assert client.post(f"/portfolios/{pid}/import/snaptrade", headers=_hdr(t)).json()["positions_imported"] == 0
-
-    # Saved preference overrides the env default.
-    pid2 = _new_portfolio(client, t)
-    client.put(
-        f"/portfolios/{pid2}/preferences",
-        json={"snaptrade_institutions": "Interactive Brokers"},
-        headers=_hdr(t),
-    )
-    assert client.post(f"/portfolios/{pid2}/import/snaptrade", headers=_hdr(t)).json()["positions_imported"] == 3
-
-    # "all" = import every linked account regardless of the env default.
-    pid3 = _new_portfolio(client, t)
-    client.put(f"/portfolios/{pid3}/preferences", json={"snaptrade_institutions": "all"}, headers=_hdr(t))
-    assert client.post(f"/portfolios/{pid3}/import/snaptrade", headers=_hdr(t)).json()["positions_imported"] == 3
