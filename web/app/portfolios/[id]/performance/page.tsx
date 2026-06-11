@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getPerformance, getSummary, MetronApiError } from "@/lib/api";
+import { acctParams, getPerformance, getSummary, MetronApiError } from "@/lib/api";
 import { isoDate, money, percent, signClass, signedMoney } from "@/lib/format";
 import { Empty, Section, StatCard, Table } from "@/components/ui";
 import { BuildHistory } from "@/components/build-history";
@@ -7,10 +7,22 @@ import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
-export default async function PerformancePage({ params }: { params: { id: string } }) {
+export default async function PerformancePage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { account_id?: string | string[] };
+}) {
   const { id } = params;
   const tenantId = await requireTenantId();
 
+  const raw = searchParams.account_id;
+  const accountIds = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  const navQuery = acctParams(accountIds);
+
+  // Performance is whole-portfolio — per-account NAV history can't be reconstructed for
+  // snapshot-sourced accounts, so the series + summary stay unscoped (note shown below).
   let perf, summary;
   try {
     [perf, summary] = await Promise.all([getPerformance(tenantId, id), getSummary(tenantId, id)]);
@@ -27,7 +39,7 @@ export default async function PerformancePage({ params }: { params: { id: string
 
   return (
     <div>
-      <Link href={`/portfolios/${id}`} className="text-sm text-muted hover:text-ink">
+      <Link href={`/portfolios/${id}${navQuery}`} className="text-sm text-muted hover:text-ink">
         ← Portfolio
       </Link>
 
@@ -35,6 +47,14 @@ export default async function PerformancePage({ params }: { params: { id: string
       <p className="text-sm text-muted">
         NAV records forward each time you refresh prices. To get instant history, build it from past prices.
       </p>
+
+      {accountIds.length > 0 ? (
+        <p className="mt-2 rounded border border-line bg-slate-50 px-3 py-2 text-xs text-muted">
+          ⓘ Performance reflects the whole portfolio. Per-account history is still accruing — snapshot-sourced
+          accounts (IBKR / SnapTrade) have no back-history to reconstruct, so a per-account NAV-vs-SPY series
+          builds forward from today.
+        </p>
+      ) : null}
 
       <div className="mt-3">
         <BuildHistory portfolioId={id} />

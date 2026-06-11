@@ -35,6 +35,34 @@ def test_missing_nullable_column_is_added(tmp_path):
     engine.dispose()
 
 
+def test_account_nickname_column_is_added(tmp_path):
+    """The new nullable ``accounts.nickname`` back-fills onto an existing DB (the personal
+    SQLite tier path — no Alembic needed)."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'old.sqlite'}")
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE accounts DROP COLUMN nickname"))  # simulate the pre-nickname schema
+    assert "nickname" not in _columns(engine, "accounts")
+
+    _sync_additive_columns(engine)
+    assert "nickname" in _columns(engine, "accounts")
+    engine.dispose()
+
+
+def test_account_nav_snapshots_table_is_created(tmp_path):
+    """The new ``account_nav_snapshots`` table auto-creates via create_all (checkfirst) on
+    an older DB that predates it."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'old.sqlite'}")
+    Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE account_nav_snapshots"))  # simulate the older schema
+    assert "account_nav_snapshots" not in set(inspect(engine).get_table_names())
+
+    Base.metadata.create_all(bind=engine)  # checkfirst recreates only the missing table
+    assert "account_nav_snapshots" in set(inspect(engine).get_table_names())
+    engine.dispose()
+
+
 def test_missing_non_nullable_column_fails_loud(tmp_path):
     """A non-nullable missing column can't be back-filled on existing rows safely — the
     shim raises (it needs a real migration) rather than guessing a value."""

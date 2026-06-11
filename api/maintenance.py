@@ -43,6 +43,7 @@ class RefreshResult:
     snapshots_recorded: int
     fx_rates_updated: int = 0
     snapshots_reconstructed: int = 0
+    account_snapshots_recorded: int = 0  # per-account NAV snapshots written this run
     risk_computed: int = 0          # portfolios whose factor risk backfilled + fit
     attribution_computed: int = 0   # portfolios whose sector attribution backfilled + ran
 
@@ -69,7 +70,7 @@ def daily_refresh(session: Session, *, today: date | None = None) -> RefreshResu
 
     portfolios = session.scalars(select(models.Portfolio)).all()
     total_symbols = total_updated = total_snaps = total_fx = 0
-    total_recon = total_risk = total_attr = 0
+    total_recon = total_risk = total_attr = total_acct_snaps = 0
     for p in portfolios:
         held = analytics.holdings(session, p.tenant_id, p.id)
         symbols = [h.ticker for h in held if h.ticker]
@@ -85,6 +86,12 @@ def daily_refresh(session: Session, *, today: date | None = None) -> RefreshResu
         if txn_ccys and earliest is not None:
             fx_updated += fx.backfill_fx_rates(session, txn_ccys, earliest, today, base=base)
         snap = performance.record_snapshot(session, p.tenant_id, p.id, today=today)
+        # Per-account NAV snapshots — additive, best-effort (a failure here never costs the
+        # portfolio snapshot). Starts the per-account history that can't be reconstructed.
+        acct_snaps = _best_effort(
+            "account-snapshots", p.id,
+            lambda p=p: performance.record_account_snapshots(session, p.tenant_id, p.id, today=today),
+        )
 
         # Derived analytics — best-effort, so the pages self-populate overnight. Each is
         # isolated: a yfinance failure on one never costs the price refresh / NAV snapshot.
@@ -107,6 +114,7 @@ def daily_refresh(session: Session, *, today: date | None = None) -> RefreshResu
         total_updated += updated
         total_fx += fx_updated
         total_snaps += 1 if snap is not None else 0
+        total_acct_snaps += acct_snaps or 0
         total_recon += recon or 0
         total_risk += 1 if (risk_summary is not None and risk_summary.computable) else 0
         total_attr += 1 if (attr_summary is not None and attr_summary.computable) else 0
@@ -124,6 +132,7 @@ def daily_refresh(session: Session, *, today: date | None = None) -> RefreshResu
         snapshots_recorded=total_snaps,
         fx_rates_updated=total_fx,
         snapshots_reconstructed=total_recon,
+        account_snapshots_recorded=total_acct_snaps,
         risk_computed=total_risk,
         attribution_computed=total_attr,
     )
@@ -145,11 +154,12 @@ def main(argv: list[str] | None = None) -> int:
             session.close()
         logger.info(
             "daily-refresh done: %d portfolios, %d symbols, %d prices, %d snapshots, "
-            "%d reconstructed, %d risk, %d attribution",
+            "%d account-snapshots, %d reconstructed, %d risk, %d attribution",
             r.portfolios,
             r.symbols,
             r.prices_updated,
             r.snapshots_recorded,
+            r.account_snapshots_recorded,
             r.snapshots_reconstructed,
             r.risk_computed,
             r.attribution_computed,

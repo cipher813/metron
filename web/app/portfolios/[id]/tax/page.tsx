@@ -1,18 +1,31 @@
 import Link from "next/link";
-import { getSummary, getTax, MetronApiError } from "@/lib/api";
+import { acctParams, getSummary, getTax, MetronApiError } from "@/lib/api";
 import { isoDate, money, quantity, signClass, signedMoney } from "@/lib/format";
 import { Empty, Section, StatCard, Table } from "@/components/ui";
 import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
-export default async function TaxPage({ params }: { params: { id: string } }) {
+export default async function TaxPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { account_id?: string | string[] };
+}) {
   const { id } = params;
   const tenantId = await requireTenantId();
 
+  const raw = searchParams.account_id;
+  const accountIds = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  const navQuery = acctParams(accountIds);
+
   let taxData, summary;
   try {
-    [taxData, summary] = await Promise.all([getTax(tenantId, id), getSummary(tenantId, id)]);
+    [taxData, summary] = await Promise.all([
+      getTax(tenantId, id, accountIds),
+      getSummary(tenantId, id, accountIds),
+    ]);
   } catch (e) {
     if (e instanceof MetronApiError && e.status === 404) {
       return <Empty>Portfolio not found.</Empty>;
@@ -25,7 +38,7 @@ export default async function TaxPage({ params }: { params: { id: string } }) {
 
   return (
     <div>
-      <Link href={`/portfolios/${id}`} className="text-sm text-muted hover:text-ink">
+      <Link href={`/portfolios/${id}${navQuery}`} className="text-sm text-muted hover:text-ink">
         ← Portfolio
       </Link>
 

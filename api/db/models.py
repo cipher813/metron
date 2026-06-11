@@ -85,6 +85,9 @@ class Account(Base):
     broker: Mapped[str] = mapped_column(String(50))         # "ibkr_flex" | "snaptrade" | "csv" | "ofx"
     external_id: Mapped[str] = mapped_column(String(120))   # broker-side account number
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # User-set display label (Settings). Distinct from broker ``name`` so a re-sync never
+    # clobbers it; persistence never writes this column. NULL = fall back to name/external_id.
+    nickname: Mapped[str | None] = mapped_column(String(200), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     # Tagging — persisted from the connector snapshot (was discarded pre-multicurrency).
     institution: Mapped[str | None] = mapped_column(String(120), nullable=True)  # "Fidelity", "Interactive Brokers"
@@ -194,6 +197,32 @@ class NavSnapshot(Base):
     id: Mapped[uuid.UUID] = _uuid_pk()
     tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
     portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id", ondelete="CASCADE"), index=True)
+    snap_date: Mapped[date] = mapped_column(index=True)
+    nav: Mapped[float] = mapped_column(Numeric(28, 10))
+    cost_basis: Mapped[float] = mapped_column(Numeric(28, 10), default=0)
+    external_flow: Mapped[float] = mapped_column(Numeric(28, 10), default=0)
+    spy_close: Mapped[float | None] = mapped_column(Numeric(28, 10), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class AccountNavSnapshot(Base):
+    """A dated per-ACCOUNT NAV snapshot — the account-grain sibling of ``NavSnapshot``.
+
+    Forward-recorded daily (additive; it does NOT replace the portfolio snapshot). Per-account
+    NAV history can't be reconstructed for snapshot-sourced accounts (IBKR Flex / SnapTrade
+    report current positions, not a per-account activity feed), so account-level performance
+    can only accrue going forward — this table starts that accrual. Summing the rows for a
+    selected set of accounts on a given day gives that subset's NAV. Tenant-scoped."""
+
+    __tablename__ = "account_nav_snapshots"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "account_id", "snap_date", name="uq_account_navsnapshot_day"),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), index=True)
     snap_date: Mapped[date] = mapped_column(index=True)
     nav: Mapped[float] = mapped_column(Numeric(28, 10))
     cost_basis: Mapped[float] = mapped_column(Numeric(28, 10), default=0)

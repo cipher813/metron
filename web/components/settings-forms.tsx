@@ -59,25 +59,32 @@ export function BaseCurrencyForm({ portfolioId, current }: { portfolioId: string
   );
 }
 
-type Taxable = "auto" | "taxable" | "advantaged";
+// Empty string = Auto (derive taxable status from the broker tags / keywords). The three
+// explicit values map straight onto Account.tax_treatment and are authoritative.
+const TAX_TREATMENTS: { value: string; label: string }[] = [
+  { value: "", label: "Auto" },
+  { value: "taxable", label: "Taxable" },
+  { value: "tax_deferred", label: "Tax-deferred" },
+  { value: "tax_exempt", label: "Tax-exempt" },
+];
 
 export function AccountTagRow({ portfolioId, account }: { portfolioId: string; account: Account }) {
+  const [nickname, setNickname] = useState(account.nickname ?? "");
   const [institution, setInstitution] = useState(account.institution ?? "");
   const [accountType, setAccountType] = useState(account.account_type ?? "");
-  // null = auto (derive). We start from the *current* derived state but tag edits set
-  // an explicit override; "Auto" reverts to null.
-  const [taxable, setTaxable] = useState<Taxable>(account.taxable ? "taxable" : "advantaged");
+  // The 3-way type is authoritative; "" = Auto (clears any override on save).
+  const [treatment, setTreatment] = useState(account.tax_treatment ?? "");
   const [pending, start] = useTransition();
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   function save() {
     setMsg(null);
-    const taxable_override = taxable === "auto" ? null : taxable === "taxable";
     start(async () => {
       const r = await updateAccountTagsAction(portfolioId, account.account_id, {
+        nickname: nickname.trim() || null,
         institution: institution.trim() || null,
         account_type: accountType.trim() || null,
-        taxable_override,
+        tax_treatment: treatment || null,
       });
       setMsg({ ok: r.ok, text: r.message });
     });
@@ -85,7 +92,15 @@ export function AccountTagRow({ portfolioId, account }: { portfolioId: string; a
 
   return (
     <tr className="border-b border-line last:border-0 align-top">
-      <td className="px-4 py-2 font-medium">{account.name || account.external_id}</td>
+      <td className="px-4 py-2 font-medium text-muted">{account.name || account.external_id}</td>
+      <td className="px-4 py-2">
+        <input
+          className="w-36 rounded border border-line px-2 py-1 text-sm"
+          value={nickname}
+          placeholder="e.g. My Roth"
+          onChange={(e) => setNickname(e.target.value)}
+        />
+      </td>
       <td className="px-4 py-2">
         <input
           className="w-36 rounded border border-line px-2 py-1 text-sm"
@@ -105,12 +120,14 @@ export function AccountTagRow({ portfolioId, account }: { portfolioId: string; a
       <td className="px-4 py-2">
         <select
           className="rounded border border-line px-2 py-1 text-sm"
-          value={taxable}
-          onChange={(e) => setTaxable(e.target.value as Taxable)}
+          value={treatment}
+          onChange={(e) => setTreatment(e.target.value)}
         >
-          <option value="auto">Auto</option>
-          <option value="taxable">Taxable</option>
-          <option value="advantaged">Tax-advantaged</option>
+          {TAX_TREATMENTS.map((t) => (
+            <option key={t.value} value={t.value}>
+              {t.label}
+            </option>
+          ))}
         </select>
       </td>
       <td className="px-4 py-2">

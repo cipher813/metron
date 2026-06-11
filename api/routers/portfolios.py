@@ -17,7 +17,7 @@ from __future__ import annotations
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -68,8 +68,12 @@ class AccountTagsIn(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    nickname: str | None = None
     institution: str | None = None
     account_type: str | None = None
+    # The 3-way type (taxable | tax_deferred | tax_exempt). Setting it clears any binary
+    # taxable_override so the 3-way is the single governing control; null = Auto-derive.
+    tax_treatment: str | None = None
     taxable_override: bool | None = None
 
 
@@ -160,10 +164,16 @@ class AccountOut(BaseModel):
     external_id: str
     name: str
     currency: str
+    nickname: str | None = None
     institution: str | None = None
     account_type: str | None = None
     tax_treatment: str | None = None
     taxable: bool = True
+    # Per-account valuation (base currency); None until priced (cost basis is price-free).
+    cost_basis_base: float | None = None
+    market_value: float | None = None
+    unrealized_gain: float | None = None
+    n_unconverted: int = 0
 
 
 class SummaryOut(BaseModel):
@@ -504,22 +514,67 @@ def _owned_account(
     return account
 
 
+def _selected_account_ids(
+    account_id: list[uuid.UUID] = Query(default=[]),
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> set[uuid.UUID] | None:
+    """Resolve the ``?account_id=`` selection (repeatable) into a validated set, or None.
+
+    Absent OR empty → None (whole portfolio; we never pass ``IN ()`` to SQL). Every
+    requested id must belong to this portfolio — any unknown/cross-portfolio id 404s as a
+    set (never leak which ids exist), mirroring ``_owned_account`` for the single-id path."""
+    if not account_id:
+        return None
+    requested = set(account_id)
+    found = set(
+        session.scalars(
+            select(models.Account.id).where(
+                models.Account.portfolio_id == portfolio.id,
+                models.Account.id.in_(requested),
+            )
+        ).all()
+    )
+    if found != requested:
+        raise HTTPException(status_code=404, detail="Account not found")
+    return requested
+
+
+_TAX_TREATMENTS = {"taxable", "tax_deferred", "tax_exempt"}
+
+
 @router.patch("/{portfolio_id}/accounts/{account_id}", response_model=AccountOut)
 def update_account_tags(
     body: AccountTagsIn,
     account: models.Account = Depends(_owned_account),
     session: Session = Depends(get_session),
 ) -> analytics.AccountInfo:
-    """Edit an account's tags (institution / type / taxable override) from Settings.
+    """Edit an account's tags (nickname / institution / type / 3-way tax treatment) from
+    Settings.
 
-    Only fields present in the request body are changed (omitted = leave as-is);
-    ``taxable_override`` may be set to ``null`` to revert to auto-derivation. Returns the
-    account with its recomputed ``taxable`` status."""
+    Only fields present in the request body are changed (omitted = leave as-is). Setting
+    ``tax_treatment`` (taxable | tax_deferred | tax_exempt, or null for Auto) is the
+    single 3-way control: it **clears any binary ``taxable_override``** so the two can't
+    disagree. ``taxable_override`` may still be set directly (kept for back-compat).
+    Returns the account with its recomputed ``taxable`` status."""
     fields = body.model_fields_set
+    if "nickname" in fields:
+        account.nickname = (body.nickname or "").strip() or None
     if "institution" in fields:
         account.institution = (body.institution or "").strip() or None
     if "account_type" in fields:
         account.account_type = (body.account_type or "").strip() or None
+    if "tax_treatment" in fields:
+        treatment = (body.tax_treatment or "").strip().lower() or None
+        if treatment is not None and treatment not in _TAX_TREATMENTS:
+            raise HTTPException(
+                status_code=422,
+                detail="tax_treatment must be one of taxable, tax_deferred, tax_exempt (or null)",
+            )
+        account.tax_treatment = treatment
+        # The 3-way is authoritative — drop any stale binary override so is_taxable reads
+        # straight from tax_treatment (taxable → True, tax_deferred/tax_exempt → False).
+        account.taxable_override = None
     if "taxable_override" in fields:
         account.taxable_override = body.taxable_override
     session.commit()
@@ -530,6 +585,7 @@ def update_account_tags(
         external_id=account.external_id,
         name=account.name or "",
         currency=account.currency,
+        nickname=account.nickname,
         institution=account.institution,
         account_type=account.account_type,
         tax_treatment=account.tax_treatment,
@@ -715,41 +771,49 @@ def refresh_prices(
     # Performance "Build history" / Risk+Attribution "Compute" buttons — kept off this
     # interactive path so a refresh click stays fast.)
     snap = performance.record_snapshot(session, portfolio.tenant_id, portfolio.id, today=date.today())
+    # Per-account NAV snapshots too (additive; starts the per-account history). Cheap —
+    # reuses the just-cached prices via one grouped valuation.
+    performance.record_account_snapshots(session, portfolio.tenant_id, portfolio.id, today=date.today())
     return PriceRefreshOut(symbols_requested=len(symbols), prices_updated=updated, snapshot_recorded=snap is not None)
 
 
 @router.get("/{portfolio_id}/holdings", response_model=list[HoldingOut])
 def get_holdings(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> list[analytics.Holding]:
     # Valued when a cached close exists for the ticker; cost-basis-only otherwise.
-    return analytics.valued_holdings(session, portfolio.tenant_id, portfolio.id)
+    # ``?account_id=`` (repeatable) scopes to the selected accounts; absent = all.
+    return analytics.valued_holdings(session, portfolio.tenant_id, portfolio.id, account_ids=account_ids)
 
 
 @router.get("/{portfolio_id}/transactions", response_model=list[TransactionOut])
 def get_transactions(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> list[analytics.TransactionRow]:
-    return analytics.transactions(session, portfolio.tenant_id, portfolio.id)
+    return analytics.transactions(session, portfolio.tenant_id, portfolio.id, account_ids=account_ids)
 
 
 @router.get("/{portfolio_id}/realized", response_model=list[RealizedOut])
 def get_realized(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> list[analytics.RealizedLot]:
-    return analytics.realized(session, portfolio.tenant_id, portfolio.id)
+    return analytics.realized(session, portfolio.tenant_id, portfolio.id, account_ids=account_ids)
 
 
 @router.get("/{portfolio_id}/income", response_model=list[IncomeOut])
 def get_income(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> list:
     """Per-year realized income (cap gains ST/LT + dividends + interest), newest first."""
-    return analytics.income(session, portfolio.tenant_id, portfolio.id)
+    return analytics.income(session, portfolio.tenant_id, portfolio.id, account_ids=account_ids)
 
 
 @router.get("/{portfolio_id}/accounts", response_model=list[AccountOut])
@@ -757,6 +821,7 @@ def get_accounts(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
     session: Session = Depends(get_session),
 ) -> list[analytics.AccountInfo]:
+    # Always lists ALL accounts (this is the selector itself) with per-account valuation.
     return analytics.accounts(session, portfolio.tenant_id, portfolio.id)
 
 
@@ -789,58 +854,76 @@ def reconstruct_performance(
 def get_tax(
     taxable_only: bool = True,
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> tax.TaxSummary:
     """Per-lot tax view — holding-period term, unrealized P&L (in the base currency) at
     the latest cached close, and harvestable losses. Defaults to **taxable accounts
     only** (gains in an IRA/401(k)/Roth are never taxed); pass ``taxable_only=false`` to
-    include tax-advantaged accounts. Unrealized totals are null until prices are cached
-    (refresh prices first); cost basis + term show regardless."""
+    include tax-advantaged accounts. A ``?account_id=`` selection is intersected with the
+    taxable set (taxable-only always wins). Unrealized totals are null until prices are
+    cached (refresh prices first); cost basis + term show regardless."""
     return tax.tax_lots(
-        session, portfolio.tenant_id, portfolio.id, today=date.today(), taxable_only=taxable_only
+        session, portfolio.tenant_id, portfolio.id, today=date.today(),
+        taxable_only=taxable_only, selected_account_ids=account_ids,
     )
 
 
 @router.get("/{portfolio_id}/risk", response_model=RiskOut)
 def get_risk(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> risk.RiskSummary:
     """Factor risk decomposition + tracking error vs SPY, from already-cached price
     history. Marked not-computable (with a reason) when the cache lacks enough
-    history — POST .../risk/compute to backfill it."""
-    return risk.compute_risk(session, portfolio.tenant_id, portfolio.id, today=date.today(), do_backfill=False)
+    history — POST .../risk/compute to backfill it. ``?account_id=`` scopes the holdings."""
+    return risk.compute_risk(
+        session, portfolio.tenant_id, portfolio.id, today=date.today(), do_backfill=False, account_ids=account_ids
+    )
 
 
 @router.post("/{portfolio_id}/risk/compute", response_model=RiskOut)
 def compute_risk(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> risk.RiskSummary:
     """Backfill the held + factor-ETF price history over the risk window, then compute
-    the factor risk decomposition. The heavier (network) path behind the GET."""
-    return risk.compute_risk(session, portfolio.tenant_id, portfolio.id, today=date.today(), do_backfill=True)
+    the factor risk decomposition. The heavier (network) path behind the GET.
+    ``?account_id=`` scopes the holdings."""
+    return risk.compute_risk(
+        session, portfolio.tenant_id, portfolio.id, today=date.today(), do_backfill=True, account_ids=account_ids
+    )
 
 
 @router.get("/{portfolio_id}/attribution", response_model=AttributionOut)
 def get_attribution(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> attribution.AttributionSummary:
     """Brinson-Fachler sector attribution vs SPY, from already-cached prices + sectors.
     Marked not-computable (with a reason) when the cache lacks history or holding
-    sectors — POST .../attribution/compute to source them."""
-    return attribution.compute_attribution(session, portfolio.tenant_id, portfolio.id, today=date.today(), do_backfill=False)
+    sectors — POST .../attribution/compute to source them. ``?account_id=`` scopes the
+    holdings."""
+    return attribution.compute_attribution(
+        session, portfolio.tenant_id, portfolio.id, today=date.today(), do_backfill=False, account_ids=account_ids
+    )
 
 
 @router.post("/{portfolio_id}/attribution/compute", response_model=AttributionOut)
 def compute_attribution(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> attribution.AttributionSummary:
     """Resolve holding sectors + backfill held and SPDR-ETF history over the window,
-    then run the attribution. The heavier (network) path behind the GET."""
-    return attribution.compute_attribution(session, portfolio.tenant_id, portfolio.id, today=date.today(), do_backfill=True)
+    then run the attribution. The heavier (network) path behind the GET. ``?account_id=``
+    scopes the holdings."""
+    return attribution.compute_attribution(
+        session, portfolio.tenant_id, portfolio.id, today=date.today(), do_backfill=True, account_ids=account_ids
+    )
 
 
 @router.get("/{portfolio_id}/calendar", response_model=CalendarOut)
@@ -881,6 +964,11 @@ def get_account_detail(
             external_id=account.external_id,
             name=account.name or "",
             currency=account.currency,
+            nickname=account.nickname,
+            institution=account.institution,
+            account_type=account.account_type,
+            tax_treatment=account.tax_treatment,
+            taxable=account_meta.is_taxable(account),
         ),
         holdings=analytics.valued_holdings(session, account.tenant_id, account.portfolio_id, account.id),
         realized=analytics.realized(session, account.tenant_id, account.portfolio_id, account.id),
@@ -891,8 +979,10 @@ def get_account_detail(
 @router.get("/{portfolio_id}/summary", response_model=SummaryOut)
 def get_summary(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> analytics.PortfolioSummary:
-    """Portfolio home totals — all price-free (cost basis, realized, income). No market
-    value / unrealized P&L until a licensed price feed lands."""
-    return analytics.summary(session, portfolio.tenant_id, portfolio.id)
+    """Portfolio home totals — cost basis, realized, income, plus market value /
+    unrealized when prices are cached. ``?account_id=`` scopes every total to the
+    selected accounts (absent = whole portfolio)."""
+    return analytics.summary(session, portfolio.tenant_id, portfolio.id, account_ids=account_ids)
