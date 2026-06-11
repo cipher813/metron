@@ -10,10 +10,10 @@ import { requireTenantId } from "@/lib/session";
 
 export type ActionResult = { ok: boolean; message: string };
 
-export async function computeAttributionAction(portfolioId: string): Promise<ActionResult> {
+export async function computeAttributionAction(portfolioId: string, accountIds?: string[]): Promise<ActionResult> {
   try {
     const tenantId = await requireTenantId();
-    const a = await computeAttribution(tenantId, portfolioId);
+    const a = await computeAttribution(tenantId, portfolioId, accountIds);
     revalidatePath(`/portfolios/${portfolioId}/attribution`);
     return {
       ok: true,

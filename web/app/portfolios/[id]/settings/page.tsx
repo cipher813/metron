@@ -37,11 +37,11 @@ export default async function SettingsPage({ params }: { params: { id: string } 
         <BaseCurrencyForm portfolioId={id} current={portfolio.base_currency} />
       </Section>
 
-      <Section title="Accounts" note="tag institution / type; set taxable status (Auto derives from the broker)">
+      <Section title="Accounts" note="set a nickname, institution, and tax treatment (Auto derives from the broker)">
         {accounts.length === 0 ? (
           <Empty>No connected accounts yet.</Empty>
         ) : (
-          <Table head={["Account", "Institution", "Type", "Taxable", "Save"]}>
+          <Table head={["Account", "Nickname", "Institution", "Account type", "Tax treatment", "Save"]}>
             {accounts.map((a) => (
               <AccountTagRow key={a.account_id} portfolioId={id} account={a} />
             ))}

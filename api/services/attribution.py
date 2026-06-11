@@ -22,6 +22,7 @@ reason rather than producing a bogus effect.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -144,13 +145,16 @@ def compute_attribution(
     price_source: HistorySource | None = None,
     sector_source: SectorSource | None = None,
     benchmark_source: BenchmarkSource | None = None,
+    account_ids: Collection[uuid.UUID] | None = None,
 ) -> AttributionSummary:
     """Brinson-Fachler sector attribution of the market-value-weighted portfolio vs
     SPY over the trailing ``lookback_days``. ``do_backfill`` (the POST path) first
     resolves holding sectors and backfills the held + SPDR-ETF history over the window;
-    the GET path computes from whatever's already cached."""
+    the GET path computes from whatever's already cached. ``account_ids`` scopes the
+    holdings (portfolio sector weights/returns) to the selected accounts; None = whole
+    portfolio (the SPY benchmark + SPDR history stay global)."""
     start = today - timedelta(days=lookback_days)
-    held = analytics.valued_holdings(session, tenant_id, portfolio_id)
+    held = analytics.valued_holdings(session, tenant_id, portfolio_id, account_ids=account_ids)
     priced = [h for h in held if h.market_value and h.market_value > 0]
     if not priced:
         return AttributionSummary(False, reason="No priced holdings — refresh prices first.", lookback_days=lookback_days)

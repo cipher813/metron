@@ -1,21 +1,31 @@
 import Link from "next/link";
-import { getRealized, getSummary, getTransactions, MetronApiError } from "@/lib/api";
+import { acctParams, getRealized, getSummary, getTransactions, MetronApiError } from "@/lib/api";
 import { isoDate, money, quantity, signClass, signedMoney } from "@/lib/format";
 import { Empty, Section, Table } from "@/components/ui";
 import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
-export default async function TransactionsPage({ params }: { params: { id: string } }) {
+export default async function TransactionsPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { account_id?: string | string[] };
+}) {
   const { id } = params;
   const tenantId = await requireTenantId();
+
+  const raw = searchParams.account_id;
+  const accountIds = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  const navQuery = acctParams(accountIds);
 
   let summary, transactions, realized;
   try {
     [summary, transactions, realized] = await Promise.all([
-      getSummary(tenantId, id),
-      getTransactions(tenantId, id),
-      getRealized(tenantId, id),
+      getSummary(tenantId, id, accountIds),
+      getTransactions(tenantId, id, accountIds),
+      getRealized(tenantId, id, accountIds),
     ]);
   } catch (e) {
     if (e instanceof MetronApiError && e.status === 404) {
@@ -31,7 +41,7 @@ export default async function TransactionsPage({ params }: { params: { id: strin
 
   return (
     <div>
-      <Link href={`/portfolios/${id}`} className="text-sm text-muted hover:text-ink">
+      <Link href={`/portfolios/${id}${navQuery}`} className="text-sm text-muted hover:text-ink">
         ← Portfolio
       </Link>
 

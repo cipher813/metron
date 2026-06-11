@@ -9,10 +9,10 @@ import { requireTenantId } from "@/lib/session";
 
 export type ActionResult = { ok: boolean; message: string };
 
-export async function computeRiskAction(portfolioId: string): Promise<ActionResult> {
+export async function computeRiskAction(portfolioId: string, accountIds?: string[]): Promise<ActionResult> {
   try {
     const tenantId = await requireTenantId();
-    const r = await computeRisk(tenantId, portfolioId);
+    const r = await computeRisk(tenantId, portfolioId, accountIds);
     revalidatePath(`/portfolios/${portfolioId}/risk`);
     return {
       ok: true,

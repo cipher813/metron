@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getAttribution, MetronApiError } from "@/lib/api";
+import { acctParams, getAttribution, MetronApiError } from "@/lib/api";
 import { percent, signClass } from "@/lib/format";
 import { Empty, Section, StatCard, Table } from "@/components/ui";
 import { ComputeAttribution } from "@/components/compute-attribution";
@@ -15,13 +15,23 @@ function ret(v: number | null): string {
   return v != null ? percent(v) : "—";
 }
 
-export default async function AttributionPage({ params }: { params: { id: string } }) {
+export default async function AttributionPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { account_id?: string | string[] };
+}) {
   const { id } = params;
   const tenantId = await requireTenantId();
 
+  const raw = searchParams.account_id;
+  const accountIds = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  const navQuery = acctParams(accountIds);
+
   let attr;
   try {
-    attr = await getAttribution(tenantId, id);
+    attr = await getAttribution(tenantId, id, accountIds);
   } catch (e) {
     if (e instanceof MetronApiError && e.status === 404) {
       return <Empty>Portfolio not found.</Empty>;
@@ -31,7 +41,7 @@ export default async function AttributionPage({ params }: { params: { id: string
 
   return (
     <div>
-      <Link href={`/portfolios/${id}`} className="text-sm text-muted hover:text-ink">
+      <Link href={`/portfolios/${id}${navQuery}`} className="text-sm text-muted hover:text-ink">
         ← Portfolio
       </Link>
 
@@ -40,6 +50,7 @@ export default async function AttributionPage({ params }: { params: { id: string
         Brinson-Fachler decomposition of active return vs {attr.benchmark} into allocation (sector tilts), selection
         (picks within a sector), and interaction
         {attr.lookback_days ? `, over the trailing ${attr.lookback_days} days` : ""}.
+        {accountIds.length > 0 ? " Scoped to the selected accounts." : ""}
       </p>
 
       <div className="mt-3">

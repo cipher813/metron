@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -129,11 +130,14 @@ def compute_risk(
     window_days: int = 252,
     do_backfill: bool = False,
     source: HistorySource | None = None,
+    account_ids: Collection[uuid.UUID] | None = None,
 ) -> RiskSummary:
     """Ex-ante factor risk of the market-value-weighted portfolio. ``do_backfill``
     fetches the held + factor-ETF history over the window first (the POST path); the
-    GET path computes from whatever is already cached."""
-    held = analytics.valued_holdings(session, tenant_id, portfolio_id)
+    GET path computes from whatever is already cached. ``account_ids`` scopes the
+    holdings (weights + backfilled tickers) to the selected accounts; None = whole
+    portfolio (factor-ETF history is global and stays unscoped)."""
+    held = analytics.valued_holdings(session, tenant_id, portfolio_id, account_ids=account_ids)
     priced = [h for h in held if h.market_value and h.market_value > 0]
     if not priced:
         return RiskSummary(False, reason="No priced holdings — refresh prices first.")

@@ -165,12 +165,17 @@ def load_ledger(
 
 
 def _position_rows(
-    session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, account_id: uuid.UUID | None = None
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    account_id: uuid.UUID | None = None,
+    account_ids: Collection[uuid.UUID] | None = None,
 ):
     """Fetch ``(quantity, avg_cost, market_value_local, as_of, ticker)`` for
     broker-reported positions in a portfolio (snapshot-sourced accounts: Flex/SnapTrade),
-    optionally one account. ``market_value_local`` is the broker's native value (the
-    foreign-listing valuation fallback) and may be None."""
+    optionally one account or a SET of accounts. ``market_value_local`` is the broker's
+    native value (the foreign-listing valuation fallback) and may be None. ``account_ids``
+    narrows to a set (an empty set yields no rows)."""
     stmt = (
         select(
             models.Position.quantity,
@@ -185,6 +190,8 @@ def _position_rows(
     )
     if account_id is not None:
         stmt = stmt.where(models.Position.account_id == account_id)
+    if account_ids is not None:
+        stmt = stmt.where(models.Position.account_id.in_(account_ids))
     return session.execute(stmt).all()
 
 
@@ -206,7 +213,11 @@ def _currency_by_symbol(session: Session, symbols: list[str]) -> dict[str, str]:
 
 
 def holdings(
-    session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, account_id: uuid.UUID | None = None
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    account_id: uuid.UUID | None = None,
+    account_ids: Collection[uuid.UUID] | None = None,
 ) -> list[Holding]:
     """Current open positions with share-weighted average cost + total (native) cost basis.
 
@@ -215,7 +226,8 @@ def holdings(
     the broker** (Flex/SnapTrade → the ``positions`` table). Per-account ownership
     guarantees a single account is only one source, so the two sets never double-count
     the same holding; a ticker held in both a CSV account and a Flex account correctly
-    sums across accounts. With ``account_id`` the union is scoped to that one account.
+    sums across accounts. With ``account_id`` (one) or ``account_ids`` (a set) the union
+    is scoped — the SAME filter is applied to BOTH sources so the two never desync.
 
     All monetary values here are in the instrument's NATIVE currency — FX conversion to
     the portfolio base happens in ``valued_holdings``."""
@@ -224,7 +236,7 @@ def holdings(
     broker_mv: dict[str, float] = {}
     broker_as_of: dict[str, date] = {}
 
-    ledger = load_ledger(session, tenant_id, portfolio_id, account_id)
+    ledger = load_ledger(session, tenant_id, portfolio_id, account_id, account_ids)
     for ticker in ledger.open_lots:
         shares, avg_cost = ledger.position(ticker)
         if shares > 0:
@@ -233,7 +245,7 @@ def holdings(
             agg[ticker][1] += shares * avg_cost
 
     for quantity, avg_cost, mv_local, as_of, ticker in _position_rows(
-        session, tenant_id, portfolio_id, account_id
+        session, tenant_id, portfolio_id, account_id, account_ids
     ):
         qty = float(quantity)
         if qty <= 0:
@@ -265,8 +277,42 @@ def holdings(
     return out
 
 
+def _apply_valuation(h: Holding, prices: dict, fx_rates: dict[str, float | None]) -> None:
+    """Fold a cached price + FX rate into one native ``Holding``, in place.
+
+    The single valuation rule shared by ``valued_holdings`` and
+    ``valued_holdings_by_account`` so per-portfolio and per-account views value
+    identically. Native price = cached close, else broker-native fallback; base fields
+    stay None when no FX rate is cached (never fabricates 1 unit foreign = 1 USD)."""
+    h.fx_rate = fx_rates.get(h.currency)
+    # Cost basis → base (needs only the FX rate, not a price).
+    if h.fx_rate is not None:
+        h.cost_basis_base = h.cost_basis * h.fx_rate
+    # Native price: cached close first, broker-native fallback.
+    point = prices.get(h.ticker)
+    if point is not None:
+        h.last_price = point.close
+        h.last_price_date = point.bar_date
+    elif h.broker_market_price is not None:
+        h.last_price = h.broker_market_price
+        h.last_price_date = h.broker_as_of
+    if h.last_price is None:
+        return
+    h.market_value_local = h.last_price * h.quantity
+    # Currency-invariant return ratio (native over native).
+    h.unrealized_pct = ((h.market_value_local - h.cost_basis) / h.cost_basis) if h.cost_basis else None
+    if h.fx_rate is not None:
+        h.market_value = h.market_value_local * h.fx_rate
+        if h.cost_basis_base is not None:
+            h.unrealized_gain = h.market_value - h.cost_basis_base
+
+
 def valued_holdings(
-    session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, account_id: uuid.UUID | None = None
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    account_id: uuid.UUID | None = None,
+    account_ids: Collection[uuid.UUID] | None = None,
 ) -> list[Holding]:
     """Holdings enriched with market value, converted to the portfolio base currency.
 
@@ -279,36 +325,49 @@ def valued_holdings(
     Never fabricates: an unpriced holding keeps its valuation None (shown at cost), and a
     foreign holding with **no cached FX rate** keeps its BASE fields None (the native
     ``_local`` values are still shown) rather than mis-counting 1 unit foreign as 1 USD.
-    Composes with account_id, so per-account views value cleanly too."""
-    held = holdings(session, tenant_id, portfolio_id, account_id)
+    Composes with account_id / account_ids, so per-account views value cleanly too."""
+    held = holdings(session, tenant_id, portfolio_id, account_id, account_ids)
     if not held:
         return held
     base = _base_currency(session, portfolio_id)
     prices = price_service.latest_close_by_symbol(session, [h.ticker for h in held])
     fx_rates = fx_service.rates_to_base(session, [h.currency for h in held], base=base)
     for h in held:
-        h.fx_rate = fx_rates.get(h.currency)
-        # Cost basis → base (needs only the FX rate, not a price).
-        if h.fx_rate is not None:
-            h.cost_basis_base = h.cost_basis * h.fx_rate
-        # Native price: cached close first, broker-native fallback.
-        point = prices.get(h.ticker)
-        if point is not None:
-            h.last_price = point.close
-            h.last_price_date = point.bar_date
-        elif h.broker_market_price is not None:
-            h.last_price = h.broker_market_price
-            h.last_price_date = h.broker_as_of
-        if h.last_price is None:
-            continue
-        h.market_value_local = h.last_price * h.quantity
-        # Currency-invariant return ratio (native over native).
-        h.unrealized_pct = ((h.market_value_local - h.cost_basis) / h.cost_basis) if h.cost_basis else None
-        if h.fx_rate is not None:
-            h.market_value = h.market_value_local * h.fx_rate
-            if h.cost_basis_base is not None:
-                h.unrealized_gain = h.market_value - h.cost_basis_base
+        _apply_valuation(h, prices, fx_rates)
     return held
+
+
+def valued_holdings_by_account(
+    session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID
+) -> dict[uuid.UUID, list[Holding]]:
+    """Per-account valued holdings for EVERY account in the portfolio, in one shot.
+
+    Powers the Accounts panel's per-account cost basis / market value / unrealized. Each
+    account's holdings come from the existing per-account ``holdings`` union (ledger XOR
+    broker-snapshot, FIFO replayed per account so cost basis is correct), but the price +
+    FX lookups run **once** over the union of all tickers/currencies — no N round-trips.
+    Returns ``{account_id: [Holding, …]}`` (empty list for an account with no open
+    positions)."""
+    acct_ids = list(
+        session.scalars(
+            select(models.Account.id).where(
+                models.Account.tenant_id == tenant_id, models.Account.portfolio_id == portfolio_id
+            )
+        ).all()
+    )
+    per_account = {
+        aid: holdings(session, tenant_id, portfolio_id, account_id=aid) for aid in acct_ids
+    }
+    all_held = [h for hs in per_account.values() for h in hs]
+    if not all_held:
+        return per_account
+    base = _base_currency(session, portfolio_id)
+    prices = price_service.latest_close_by_symbol(session, [h.ticker for h in all_held])
+    fx_rates = fx_service.rates_to_base(session, [h.currency for h in all_held], base=base)
+    for hs in per_account.values():
+        for h in hs:
+            _apply_valuation(h, prices, fx_rates)
+    return per_account
 
 
 def _base_currency(session: Session, portfolio_id: uuid.UUID) -> str:
@@ -318,15 +377,20 @@ def _base_currency(session: Session, portfolio_id: uuid.UUID) -> str:
 
 
 def realized(
-    session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, account_id: uuid.UUID | None = None
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    account_id: uuid.UUID | None = None,
+    account_ids: Collection[uuid.UUID] | None = None,
 ) -> list[RealizedLot]:
     """Closed lots with proceeds, basis, gain, and holding-period classification.
 
     Native amounts are converted to the portfolio base currency at the FX rate **as of
     the close date** (the rate when the gain was realized). A lot whose currency has no
-    cached as-of rate keeps its base fields None (native still shown)."""
+    cached as-of rate keeps its base fields None (native still shown). Scopes to one
+    account (``account_id``) or a set (``account_ids``)."""
     base = _base_currency(session, portfolio_id)
-    ledger = load_ledger(session, tenant_id, portfolio_id, account_id)
+    ledger = load_ledger(session, tenant_id, portfolio_id, account_id, account_ids)
     closed = sorted(ledger.realized, key=lambda r: r.close_date)
     ccy_by_ticker = _currency_by_symbol(session, [r.ticker for r in closed])
     out: list[RealizedLot] = []
@@ -354,9 +418,13 @@ def realized(
 
 
 def transactions(
-    session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, account_id: uuid.UUID | None = None
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    account_id: uuid.UUID | None = None,
+    account_ids: Collection[uuid.UUID] | None = None,
 ) -> list[TransactionRow]:
-    """The portfolio's stored transactions, oldest first (optionally one account)."""
+    """The portfolio's stored transactions, oldest first (optionally one account or a set)."""
     return [
         TransactionRow(
             trade_date=row.trade_date,
@@ -368,7 +436,7 @@ def transactions(
             fees=float(row.fees),
             currency=row.currency,
         )
-        for row, ticker in _portfolio_rows(session, tenant_id, portfolio_id, account_id)
+        for row, ticker in _portfolio_rows(session, tenant_id, portfolio_id, account_id, account_ids)
     ]
 
 
@@ -379,10 +447,18 @@ class AccountInfo:
     external_id: str
     name: str
     currency: str
+    nickname: str | None = None
     institution: str | None = None
     account_type: str | None = None
     tax_treatment: str | None = None
     taxable: bool = True
+    # Per-account valuation (base currency), from valued_holdings_by_account. cost_basis
+    # is price-free (always known when convertible); market_value / unrealized_gain are
+    # None until priced. n_unconverted flags holdings excluded for want of a cached FX rate.
+    cost_basis_base: float | None = None
+    market_value: float | None = None
+    unrealized_gain: float | None = None
+    n_unconverted: int = 0
 
 
 @dataclass
@@ -470,7 +546,8 @@ def income(
 
 def accounts(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID) -> list[AccountInfo]:
     """The portfolio's connected accounts (one row per broker account), with tags +
-    derived taxable status."""
+    derived taxable status + per-account valuation (cost basis / market value /
+    unrealized, base currency). Always lists ALL accounts (the panel is the selector)."""
     from api.services import account_meta  # local import avoids a cycle (account_meta → models)
 
     rows = session.scalars(
@@ -478,20 +555,37 @@ def accounts(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID) ->
         .where(models.Account.tenant_id == tenant_id, models.Account.portfolio_id == portfolio_id)
         .order_by(models.Account.broker, models.Account.external_id)
     ).all()
-    return [
-        AccountInfo(
-            account_id=a.id,
-            broker=a.broker,
-            external_id=a.external_id,
-            name=a.name or "",
-            currency=a.currency,
-            institution=a.institution,
-            account_type=a.account_type,
-            tax_treatment=a.tax_treatment,
-            taxable=account_meta.is_taxable(a),
+    by_account = valued_holdings_by_account(session, tenant_id, portfolio_id)
+    out: list[AccountInfo] = []
+    for a in rows:
+        held = by_account.get(a.id, [])
+        convertible = [h for h in held if h.cost_basis_base is not None]
+        priced = [h for h in held if h.market_value is not None]
+        out.append(
+            AccountInfo(
+                account_id=a.id,
+                broker=a.broker,
+                external_id=a.external_id,
+                name=a.name or "",
+                currency=a.currency,
+                nickname=a.nickname,
+                institution=a.institution,
+                account_type=a.account_type,
+                tax_treatment=a.tax_treatment,
+                taxable=account_meta.is_taxable(a),
+                # Sum only over convertible/priced holdings (a foreign holding with no
+                # cached FX rate is excluded + counted, never summed at native face value).
+                cost_basis_base=sum(h.cost_basis_base for h in convertible) if convertible else None,
+                market_value=sum(h.market_value for h in priced) if priced else None,
+                unrealized_gain=(
+                    sum(h.unrealized_gain for h in priced if h.unrealized_gain is not None)
+                    if priced
+                    else None
+                ),
+                n_unconverted=len(held) - len(convertible),
+            )
         )
-        for a in rows
-    ]
+    return out
 
 
 def foreign_transaction_currencies(
@@ -516,19 +610,28 @@ def foreign_transaction_currencies(
     return currencies, earliest
 
 
-def summary(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID) -> PortfolioSummary:
+def summary(
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    account_ids: Collection[uuid.UUID] | None = None,
+) -> PortfolioSummary:
     """Portfolio-level totals for the home view — cost basis, realized, income, plus
     market value / unrealized P&L when prices are cached (None otherwise, never
-    fabricated)."""
+    fabricated). ``account_ids`` scopes every total to the selected accounts; None =
+    whole portfolio."""
     portfolio = session.get(models.Portfolio, portfolio_id)
-    held = valued_holdings(session, tenant_id, portfolio_id)
-    closed = realized(session, tenant_id, portfolio_id)
-    yearly = income(session, tenant_id, portfolio_id)
-    n_accounts = session.scalar(
+    held = valued_holdings(session, tenant_id, portfolio_id, account_ids=account_ids)
+    closed = realized(session, tenant_id, portfolio_id, account_ids=account_ids)
+    yearly = income(session, tenant_id, portfolio_id, account_ids=account_ids)
+    count_stmt = (
         select(func.count())
         .select_from(models.Account)
         .where(models.Account.tenant_id == tenant_id, models.Account.portfolio_id == portfolio_id)
     )
+    if account_ids is not None:
+        count_stmt = count_stmt.where(models.Account.id.in_(account_ids))
+    n_accounts = session.scalar(count_stmt)
     priced = [h for h in held if h.market_value is not None]
     market_value = sum(h.market_value for h in priced) if priced else None
     unrealized_gain = (

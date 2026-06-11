@@ -43,10 +43,16 @@ export type Account = {
   external_id: string;
   name: string;
   currency: string;
+  nickname: string | null;
   institution: string | null;
   account_type: string | null;
   tax_treatment: string | null;
   taxable: boolean;
+  // Per-account valuation (base currency); null until prices are cached.
+  cost_basis_base: number | null;
+  market_value: number | null;
+  unrealized_gain: number | null;
+  n_unconverted: number;
 };
 
 export type AccountDetail = {
@@ -152,6 +158,12 @@ async function get<T>(tenantId: string, path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Build the repeatable `?account_id=` selection query (empty when no/zero ids → whole portfolio). */
+export function acctParams(accountIds?: string[]): string {
+  if (!accountIds || accountIds.length === 0) return "";
+  return "?" + accountIds.map((a) => `account_id=${encodeURIComponent(a)}`).join("&");
+}
+
 export const getPortfolios = (tenantId: string) => get<Portfolio[]>(tenantId, "/portfolios");
 export const getPortfolio = (tenantId: string, id: string) => get<Portfolio>(tenantId, `/portfolios/${id}`);
 
@@ -182,14 +194,20 @@ export async function updatePortfolio(
 /** Rename a portfolio (PATCH). Empty names are rejected by the backend (422). */
 export const renamePortfolio = (tenantId: string, id: string, name: string) =>
   updatePortfolio(tenantId, id, { name });
-export const getSummary = (tenantId: string, id: string) => get<Summary>(tenantId, `/portfolios/${id}/summary`);
-export const getHoldings = (tenantId: string, id: string) => get<Holding[]>(tenantId, `/portfolios/${id}/holdings`);
-export const getIncome = (tenantId: string, id: string) => get<IncomeYear[]>(tenantId, `/portfolios/${id}/income`);
+// The reads below take an optional `accountIds` selection (from the account panel's
+// checkboxes); omitted/empty = whole portfolio. `getAccounts` is always unscoped — it
+// IS the selector, so it lists every account with its own valuation.
+export const getSummary = (tenantId: string, id: string, accountIds?: string[]) =>
+  get<Summary>(tenantId, `/portfolios/${id}/summary${acctParams(accountIds)}`);
+export const getHoldings = (tenantId: string, id: string, accountIds?: string[]) =>
+  get<Holding[]>(tenantId, `/portfolios/${id}/holdings${acctParams(accountIds)}`);
+export const getIncome = (tenantId: string, id: string, accountIds?: string[]) =>
+  get<IncomeYear[]>(tenantId, `/portfolios/${id}/income${acctParams(accountIds)}`);
 export const getAccounts = (tenantId: string, id: string) => get<Account[]>(tenantId, `/portfolios/${id}/accounts`);
-export const getTransactions = (tenantId: string, id: string) =>
-  get<Transaction[]>(tenantId, `/portfolios/${id}/transactions`);
-export const getRealized = (tenantId: string, id: string) =>
-  get<RealizedLot[]>(tenantId, `/portfolios/${id}/realized`);
+export const getTransactions = (tenantId: string, id: string, accountIds?: string[]) =>
+  get<Transaction[]>(tenantId, `/portfolios/${id}/transactions${acctParams(accountIds)}`);
+export const getRealized = (tenantId: string, id: string, accountIds?: string[]) =>
+  get<RealizedLot[]>(tenantId, `/portfolios/${id}/realized${acctParams(accountIds)}`);
 export const getAccountDetail = (tenantId: string, id: string, accountId: string) =>
   get<AccountDetail>(tenantId, `/portfolios/${id}/accounts/${accountId}`);
 export const getPerformance = (tenantId: string, id: string) =>
@@ -212,7 +230,8 @@ export type Risk = {
   factor_pct_contrib: Record<string, number>;
 };
 
-export const getRisk = (tenantId: string, id: string) => get<Risk>(tenantId, `/portfolios/${id}/risk`);
+export const getRisk = (tenantId: string, id: string, accountIds?: string[]) =>
+  get<Risk>(tenantId, `/portfolios/${id}/risk${acctParams(accountIds)}`);
 
 export type TaxLot = {
   ticker: string;
@@ -240,7 +259,8 @@ export type Tax = {
   lots: TaxLot[];
 };
 
-export const getTax = (tenantId: string, id: string) => get<Tax>(tenantId, `/portfolios/${id}/tax`);
+export const getTax = (tenantId: string, id: string, accountIds?: string[]) =>
+  get<Tax>(tenantId, `/portfolios/${id}/tax${acctParams(accountIds)}`);
 
 export type SectorEffect = {
   sector: string;
@@ -272,8 +292,8 @@ export type Attribution = {
   sectors: SectorEffect[];
 };
 
-export const getAttribution = (tenantId: string, id: string) =>
-  get<Attribution>(tenantId, `/portfolios/${id}/attribution`);
+export const getAttribution = (tenantId: string, id: string, accountIds?: string[]) =>
+  get<Attribution>(tenantId, `/portfolios/${id}/attribution${acctParams(accountIds)}`);
 
 export type MacroPoint = { obs_date: string; value: number };
 
@@ -324,9 +344,10 @@ export async function refreshCalendar(tenantId: string, id: string): Promise<Cal
   return res.json() as Promise<Calendar>;
 }
 
-/** Resolve sectors + backfill history, then run Brinson attribution (heavier POST). */
-export async function computeAttribution(tenantId: string, id: string): Promise<Attribution> {
-  const res = await fetch(`${API_URL}/portfolios/${id}/attribution/compute`, {
+/** Resolve sectors + backfill history, then run Brinson attribution (heavier POST).
+ * `accountIds` scopes the computation to the selected accounts. */
+export async function computeAttribution(tenantId: string, id: string, accountIds?: string[]): Promise<Attribution> {
+  const res = await fetch(`${API_URL}/portfolios/${id}/attribution/compute${acctParams(accountIds)}`, {
     method: "POST",
     headers: { "X-Tenant-Id": tenantId },
     cache: "no-store",
@@ -337,9 +358,9 @@ export async function computeAttribution(tenantId: string, id: string): Promise<
   return res.json() as Promise<Attribution>;
 }
 
-/** Backfill history + compute factor risk (the heavier POST path). */
-export async function computeRisk(tenantId: string, id: string): Promise<Risk> {
-  const res = await fetch(`${API_URL}/portfolios/${id}/risk/compute`, {
+/** Backfill history + compute factor risk (the heavier POST path). `accountIds` scopes it. */
+export async function computeRisk(tenantId: string, id: string, accountIds?: string[]): Promise<Risk> {
+  const res = await fetch(`${API_URL}/portfolios/${id}/risk/compute${acctParams(accountIds)}`, {
     method: "POST",
     headers: { "X-Tenant-Id": tenantId },
     cache: "no-store",
@@ -463,8 +484,11 @@ export async function refreshPrices(tenantId: string, id: string): Promise<Price
 // --- settings (account tags + investor preferences) ------------------------
 
 export type AccountTagPatch = {
+  nickname?: string | null;
   institution?: string | null;
   account_type?: string | null;
+  // 3-way type: "taxable" | "tax_deferred" | "tax_exempt", or null for Auto-derive.
+  tax_treatment?: string | null;
   taxable_override?: boolean | null;
 };
 

@@ -49,6 +49,25 @@ def _external_flow_on(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid
     return flow
 
 
+def _account_external_flow_on(
+    session: Session, tenant_id: uuid.UUID, account_id: uuid.UUID, when: date
+) -> float:
+    """Net external cash flow into a single ACCOUNT on ``when`` (deposits +, withdrawals −).
+    The per-account analogue of ``_external_flow_on`` for account-grain snapshots."""
+    rows = session.execute(
+        select(models.Transaction.txn_type, models.Transaction.amount).where(
+            models.Transaction.tenant_id == tenant_id,
+            models.Transaction.account_id == account_id,
+            models.Transaction.trade_date == when,
+            models.Transaction.txn_type.in_([TxnType.DEPOSIT.value, TxnType.WITHDRAWAL.value]),
+        )
+    ).all()
+    flow = 0.0
+    for txn_type, amount in rows:
+        flow += float(amount) if txn_type == TxnType.DEPOSIT.value else -float(amount)
+    return flow
+
+
 def record_snapshot(
     session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, *, today: date, source=None
 ) -> models.NavSnapshot | None:
@@ -95,6 +114,73 @@ def _upsert_snapshot(
     ).first()
     if row is None:
         row = models.NavSnapshot(tenant_id=tenant_id, portfolio_id=portfolio_id, snap_date=when)
+        session.add(row)
+    row.nav = nav
+    row.cost_basis = cost_basis
+    row.external_flow = flow
+    if spy_close is not None:
+        row.spy_close = spy_close
+    return row
+
+
+def record_account_snapshots(
+    session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, *, today: date, source=None
+) -> int:
+    """Record today's per-ACCOUNT NAV snapshots (idempotent per day). Returns the count
+    written.
+
+    The additive sibling of ``record_snapshot`` — it starts the per-account NAV history
+    that can NOT be reconstructed for snapshot-sourced accounts (IBKR Flex / SnapTrade
+    report current positions, not a per-account activity feed). Summing the selected
+    accounts' rows on a day later yields that subset's NAV, so account-level performance
+    materializes as this accrues. An account with no priced holding is skipped (never a
+    fabricated NAV). Values every account in one pass via ``valued_holdings_by_account``
+    (one price + FX lookup); SPY close is fetched once and shared across accounts."""
+    by_account = analytics.valued_holdings_by_account(session, tenant_id, portfolio_id)
+    spy_point = fetch_latest_closes(["SPY"], source=source).get("SPY")
+    spy_close = spy_point.close if spy_point else None
+    written = 0
+    for account_id, held in by_account.items():
+        priced = [h for h in held if h.market_value is not None]
+        if not priced:
+            continue  # can't snapshot a NAV we can't value — never fabricate one
+        nav = sum(h.market_value for h in priced)
+        cost_basis = sum(h.cost_basis_base for h in held if h.cost_basis_base is not None)
+        flow = _account_external_flow_on(session, tenant_id, account_id, today)
+        _upsert_account_snapshot(
+            session, tenant_id, portfolio_id, account_id, today,
+            nav=nav, cost_basis=cost_basis, flow=flow, spy_close=spy_close,
+        )
+        written += 1
+    if written:
+        session.commit()
+    return written
+
+
+def _upsert_account_snapshot(
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    account_id: uuid.UUID,
+    when: date,
+    *,
+    nav: float,
+    cost_basis: float,
+    flow: float,
+    spy_close: float | None,
+) -> models.AccountNavSnapshot:
+    """Find-or-create the (account, day) snapshot and set its fields. Does NOT commit."""
+    row = session.scalars(
+        select(models.AccountNavSnapshot).where(
+            models.AccountNavSnapshot.tenant_id == tenant_id,
+            models.AccountNavSnapshot.account_id == account_id,
+            models.AccountNavSnapshot.snap_date == when,
+        )
+    ).first()
+    if row is None:
+        row = models.AccountNavSnapshot(
+            tenant_id=tenant_id, portfolio_id=portfolio_id, account_id=account_id, snap_date=when
+        )
         session.add(row)
     row.nav = nav
     row.cost_basis = cost_basis

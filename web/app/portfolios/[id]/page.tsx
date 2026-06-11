@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { getAccounts, getHoldings, getIncome, getPlugins, getPortfolio, getSummary, MetronApiError, type Portfolio, type PluginNav } from "@/lib/api";
+import { acctParams, getAccounts, getHoldings, getIncome, getPlugins, getPortfolio, getSummary, MetronApiError, type Portfolio, type PluginNav } from "@/lib/api";
 import { money, percent, quantity, signClass, signedMoney } from "@/lib/format";
 import { Empty, Section, StatCard, Table } from "@/components/ui";
+import { AccountPanel } from "@/components/account-panel";
 import { ImportPanel } from "@/components/import-panel";
 import { RefreshPrices } from "@/components/refresh-prices";
 import { RenamePortfolio } from "@/components/rename-portfolio";
@@ -9,17 +10,30 @@ import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
-export default async function PortfolioPage({ params }: { params: { id: string } }) {
+export default async function PortfolioPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { account_id?: string | string[] };
+}) {
   const { id } = params;
   const tenantId = await requireTenantId();
+
+  // The account-panel selection (repeatable ?account_id=); empty = whole portfolio.
+  const raw = searchParams.account_id;
+  const accountIds = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  const scoped = accountIds.length > 0;
+  // Carry the selection onto the cross-page nav links so it persists.
+  const navQuery = acctParams(accountIds);
 
   let portfolio: Portfolio, summary, holdings, income, accounts;
   try {
     [portfolio, summary, holdings, income, accounts] = await Promise.all([
       getPortfolio(tenantId, id),
-      getSummary(tenantId, id),
-      getHoldings(tenantId, id),
-      getIncome(tenantId, id),
+      getSummary(tenantId, id, accountIds),
+      getHoldings(tenantId, id, accountIds),
+      getIncome(tenantId, id, accountIds),
       getAccounts(tenantId, id),
     ]);
   } catch (e) {
@@ -48,13 +62,13 @@ export default async function PortfolioPage({ params }: { params: { id: string }
           ← Portfolios
         </Link>
         <div className="flex gap-4">
-          <Link href={`/portfolios/${id}/performance`} className="text-sm text-muted hover:text-ink">
+          <Link href={`/portfolios/${id}/performance${navQuery}`} className="text-sm text-muted hover:text-ink">
             Performance →
           </Link>
-          <Link href={`/portfolios/${id}/risk`} className="text-sm text-muted hover:text-ink">
+          <Link href={`/portfolios/${id}/risk${navQuery}`} className="text-sm text-muted hover:text-ink">
             Risk →
           </Link>
-          <Link href={`/portfolios/${id}/attribution`} className="text-sm text-muted hover:text-ink">
+          <Link href={`/portfolios/${id}/attribution${navQuery}`} className="text-sm text-muted hover:text-ink">
             Attribution →
           </Link>
           <Link href={`/portfolios/${id}/macro`} className="text-sm text-muted hover:text-ink">
@@ -63,10 +77,10 @@ export default async function PortfolioPage({ params }: { params: { id: string }
           <Link href={`/portfolios/${id}/calendar`} className="text-sm text-muted hover:text-ink">
             Calendar →
           </Link>
-          <Link href={`/portfolios/${id}/tax`} className="text-sm text-muted hover:text-ink">
+          <Link href={`/portfolios/${id}/tax${navQuery}`} className="text-sm text-muted hover:text-ink">
             Tax →
           </Link>
-          <Link href={`/portfolios/${id}/transactions`} className="text-sm text-muted hover:text-ink">
+          <Link href={`/portfolios/${id}/transactions${navQuery}`} className="text-sm text-muted hover:text-ink">
             Transactions &amp; realized →
           </Link>
           <Link href={`/portfolios/${id}/settings`} className="text-sm text-muted hover:text-ink">
@@ -88,7 +102,17 @@ export default async function PortfolioPage({ params }: { params: { id: string }
         <RenamePortfolio portfolioId={id} name={portfolio.name} />
       </div>
 
-      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <Section title="Accounts">
+        <AccountPanel accounts={accounts} baseCurrency={ccy} portfolioId={id} />
+        {scoped ? (
+          <p className="mt-2 text-xs text-muted">
+            Showing {summary.n_accounts} of {accounts.length} account{accounts.length === 1 ? "" : "s"} — totals,
+            holdings, income, Risk and Attribution below reflect this selection. (Performance stays whole-portfolio.)
+          </p>
+        ) : null}
+      </Section>
+
+      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {priced ? (
           <>
             <StatCard
@@ -206,29 +230,6 @@ export default async function PortfolioPage({ params }: { params: { id: string }
                 <td className="px-4 py-2 text-right tabular-nums">{money(y.dividends, ccy)}</td>
                 <td className="px-4 py-2 text-right tabular-nums">{money(y.interest, ccy)}</td>
                 <td className="px-4 py-2 text-right font-medium tabular-nums">{money(y.taxable_income, ccy)}</td>
-              </tr>
-            ))}
-          </Table>
-        )}
-      </Section>
-
-      <Section title="Accounts">
-        {accounts.length === 0 ? (
-          <Empty>No connected accounts.</Empty>
-        ) : (
-          <Table head={["Account", "Institution", "Type", "Taxable", "Broker", "Currency"]}>
-            {accounts.map((a) => (
-              <tr key={a.account_id} className="border-b border-line last:border-0 hover:bg-slate-50">
-                <td className="px-4 py-2 font-medium">
-                  <Link href={`/portfolios/${id}/accounts/${a.account_id}`} className="hover:text-ink">
-                    {a.name || a.external_id} <span aria-hidden className="text-muted">→</span>
-                  </Link>
-                </td>
-                <td className="px-4 py-2 text-muted">{a.institution || "—"}</td>
-                <td className="px-4 py-2 text-muted">{a.account_type || "—"}</td>
-                <td className="px-4 py-2 text-muted">{a.taxable ? "Taxable" : "Tax-advantaged"}</td>
-                <td className="px-4 py-2 text-right text-muted">{a.broker}</td>
-                <td className="px-4 py-2 text-right text-muted">{a.currency}</td>
               </tr>
             ))}
           </Table>

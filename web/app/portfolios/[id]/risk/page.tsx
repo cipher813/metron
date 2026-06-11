@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getRisk, MetronApiError } from "@/lib/api";
+import { acctParams, getRisk, MetronApiError } from "@/lib/api";
 import { percent } from "@/lib/format";
 import { Empty, Section, StatCard, Table } from "@/components/ui";
 import { ComputeRisk } from "@/components/compute-risk";
@@ -11,13 +11,23 @@ function vol(v: number | null): string {
   return v != null ? `${(v * 100).toFixed(1)}%` : "—";
 }
 
-export default async function RiskPage({ params }: { params: { id: string } }) {
+export default async function RiskPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { account_id?: string | string[] };
+}) {
   const { id } = params;
   const tenantId = await requireTenantId();
 
+  const raw = searchParams.account_id;
+  const accountIds = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  const navQuery = acctParams(accountIds);
+
   let risk;
   try {
-    risk = await getRisk(tenantId, id);
+    risk = await getRisk(tenantId, id, accountIds);
   } catch (e) {
     if (e instanceof MetronApiError && e.status === 404) {
       return <Empty>Portfolio not found.</Empty>;
@@ -29,7 +39,7 @@ export default async function RiskPage({ params }: { params: { id: string } }) {
 
   return (
     <div>
-      <Link href={`/portfolios/${id}`} className="text-sm text-muted hover:text-ink">
+      <Link href={`/portfolios/${id}${navQuery}`} className="text-sm text-muted hover:text-ink">
         ← Portfolio
       </Link>
 
@@ -37,6 +47,7 @@ export default async function RiskPage({ params }: { params: { id: string } }) {
       <p className="text-sm text-muted">
         Ex-ante volatility decomposed into market + style factors and idiosyncratic risk, with tracking error vs{" "}
         {risk.benchmark}. Annualized, from daily returns.
+        {accountIds.length > 0 ? " Scoped to the selected accounts." : ""}
       </p>
 
       <div className="mt-3">

@@ -12,10 +12,11 @@ unrealized and is excluded from the unrealized totals (cost basis + term still s
 from __future__ import annotations
 
 import uuid
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db import models
@@ -62,6 +63,7 @@ def tax_lots(
     *,
     today: date,
     taxable_only: bool = True,
+    selected_account_ids: Collection[uuid.UUID] | None = None,
 ) -> TaxSummary:
     """Per-lot tax view: term + unrealized P&L (at the latest cached close, converted to
     the portfolio base currency) + harvestable losses. Short-term and Unknown terms
@@ -70,18 +72,29 @@ def tax_lots(
 
     ``taxable_only`` (default) restricts the lots to taxable accounts — unrealized gains
     inside an IRA/401(k)/Roth are never taxed, so harvesting/​income figures over them
-    would mislead. Tax-advantaged accounts are excluded and counted."""
+    would mislead. Tax-advantaged accounts are excluded and counted.
+
+    ``selected_account_ids`` (the user's account-panel selection) further narrows the
+    view. When ``taxable_only`` is on, the selection is **intersected** with the taxable
+    set — the taxable-only safety always wins, so picking a retirement account can never
+    leak its lots into the Tax lens. ``n_accounts_excluded`` counts the candidate
+    accounts dropped for being tax-advantaged."""
     base = analytics._base_currency(session, portfolio_id)
-    account_ids = None
+    selected = set(selected_account_ids) if selected_account_ids is not None else None
+    # Candidate accounts = the selection if any, else every account in the portfolio.
+    candidate_ids = selected if selected is not None else set(
+        session.scalars(
+            select(models.Account.id).where(
+                models.Account.tenant_id == tenant_id, models.Account.portfolio_id == portfolio_id
+            )
+        ).all()
+    )
+    account_ids: Collection[uuid.UUID] | None = selected
     n_excluded = 0
     if taxable_only:
-        account_ids = account_meta.taxable_account_ids(session, tenant_id, portfolio_id)
-        n_total = session.scalar(
-            select(func.count())
-            .select_from(models.Account)
-            .where(models.Account.tenant_id == tenant_id, models.Account.portfolio_id == portfolio_id)
-        )
-        n_excluded = int(n_total or 0) - len(account_ids)
+        taxable = account_meta.taxable_account_ids(session, tenant_id, portfolio_id)
+        account_ids = candidate_ids & taxable
+        n_excluded = len(candidate_ids) - len(account_ids)
     ledger = analytics.load_ledger(session, tenant_id, portfolio_id, account_ids=account_ids)
     prices = price_service.latest_close_by_symbol(session, list(ledger.open_lots))
     ccy_by_ticker = analytics._currency_by_symbol(session, list(ledger.open_lots))
