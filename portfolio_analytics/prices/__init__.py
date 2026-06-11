@@ -5,6 +5,7 @@ The engine is price-source-agnostic: ``fetch_latest_closes`` takes an injectable
 licensed feed in the public multi-tenant tier without touching callers.
 """
 
+from portfolio_analytics.prices.symbology import fx_pair_symbol, to_yf_symbol
 from portfolio_analytics.prices.yfinance_source import (
     ClosePoint,
     HistorySource,
@@ -13,4 +14,12 @@ from portfolio_analytics.prices.yfinance_source import (
     fetch_latest_closes,
 )
 
-__all__ = ["ClosePoint", "HistorySource", "PriceSource", "fetch_close_history", "fetch_latest_closes"]
+__all__ = [
+    "ClosePoint",
+    "HistorySource",
+    "PriceSource",
+    "fetch_close_history",
+    "fetch_latest_closes",
+    "fx_pair_symbol",
+    "to_yf_symbol",
+]

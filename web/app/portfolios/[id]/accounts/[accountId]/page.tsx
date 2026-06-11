@@ -45,40 +45,52 @@ export default async function AccountPage({ params }: { params: { id: string; ac
           <Table
             head={
               priced
-                ? ["Ticker", "Quantity", "Avg cost", "Cost basis", "Last", "Market value", "Unrealized"]
-                : ["Ticker", "Quantity", "Avg cost", "Cost basis"]
+                ? ["Ticker", "Ccy", "Quantity", "Avg cost", "Cost basis", "Last", "Market value", "Unrealized"]
+                : ["Ticker", "Ccy", "Quantity", "Avg cost", "Cost basis"]
             }
           >
-            {holdings.map((h) => (
-              <tr key={h.ticker} className="border-b border-line last:border-0">
-                <td className="px-4 py-2 font-medium">{h.ticker}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{quantity(h.quantity)}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{money(h.avg_cost, ccy)}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{money(h.cost_basis, ccy)}</td>
-                {priced ? (
-                  <>
-                    <td className="px-4 py-2 text-right tabular-nums text-muted">
-                      {h.last_price != null ? money(h.last_price, ccy) : "—"}
-                    </td>
-                    <td className="px-4 py-2 text-right tabular-nums">
-                      {h.market_value != null ? money(h.market_value, ccy) : "—"}
-                    </td>
-                    <td className={`px-4 py-2 text-right tabular-nums ${signClass(h.unrealized_gain ?? 0)}`}>
-                      {h.unrealized_gain != null ? (
-                        <>
-                          {signedMoney(h.unrealized_gain, ccy)}
-                          {h.unrealized_pct != null ? (
-                            <span className="ml-1 text-xs">({percent(h.unrealized_pct)})</span>
-                          ) : null}
-                        </>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                  </>
-                ) : null}
-              </tr>
-            ))}
+            {holdings.map((h) => {
+              const foreign = h.currency !== ccy;
+              return (
+                <tr key={h.ticker} className="border-b border-line last:border-0">
+                  <td className="px-4 py-2 font-medium">{h.ticker}</td>
+                  <td className="px-4 py-2 text-muted">{h.currency}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{quantity(h.quantity)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{money(h.avg_cost, h.currency)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{money(h.cost_basis, h.currency)}</td>
+                  {priced ? (
+                    <>
+                      <td className="px-4 py-2 text-right tabular-nums text-muted">
+                        {h.last_price != null ? money(h.last_price, h.currency) : "—"}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums">
+                        {h.market_value != null ? (
+                          money(h.market_value, ccy)
+                        ) : foreign && h.market_value_local != null ? (
+                          <span className="text-muted" title={`No ${ccy} FX rate cached`}>
+                            {money(h.market_value_local, h.currency)}*
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className={`px-4 py-2 text-right tabular-nums ${signClass(h.unrealized_gain ?? 0)}`}>
+                        {h.unrealized_gain != null ? (
+                          <>
+                            {signedMoney(h.unrealized_gain, ccy)}
+                            {h.unrealized_pct != null ? (
+                              <span className="ml-1 text-xs">({percent(h.unrealized_pct)})</span>
+                            ) : null}
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    </>
+                  ) : null}
+                </tr>
+              );
+            })}
           </Table>
         )}
       </Section>

@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 from api.db import models
 from portfolio_analytics.ingestion.base import ConnectorSnapshot
 from portfolio_analytics.ingestion.schema import CanonicalActivity, activity_key
+from portfolio_analytics.prices import to_yf_symbol
 
 
 @dataclass
@@ -67,12 +68,22 @@ def _upsert_securities(
                 symbol=sec.ticker,
                 name=sec.name or sec.ticker,
                 currency=sec.currency,
+                exchange=sec.exchange or None,
+                yf_symbol=to_yf_symbol(sec.ticker, sec.currency, sec.exchange),
                 asset_class=(sec.asset_type or "").lower() or None,
             )
             session.add(row)
             session.flush()  # assign PK for the activity FK below
             existing[(sec.ticker, sec.currency)] = row
             result.securities_created += 1
+        else:
+            # Backfill symbology on a pre-existing row (e.g. created before this feature,
+            # or first seen via a source that carried no exchange). Never clobber a value
+            # already set — a Settings override of yf_symbol must survive re-imports.
+            if row.exchange is None and sec.exchange:
+                row.exchange = sec.exchange
+            if not row.yf_symbol:
+                row.yf_symbol = to_yf_symbol(sec.ticker, sec.currency, sec.exchange or (row.exchange or ""))
         out[security_id] = row
     return out
 
@@ -96,6 +107,9 @@ def _upsert_accounts(
                 models.Account.external_id == acct.number,
             )
         ).first()
+        institution = acct.institution or None
+        account_type = acct.account_type or None
+        tax_treatment = acct.tax_treatment or None
         if row is None:
             row = models.Account(
                 tenant_id=tenant_id,
@@ -104,10 +118,22 @@ def _upsert_accounts(
                 external_id=acct.number,
                 name=acct.label or acct.name or None,
                 currency=acct.currency or "USD",
+                institution=institution,
+                account_type=account_type,
+                tax_treatment=tax_treatment,
             )
             session.add(row)
             session.flush()
             result.accounts_created += 1
+        else:
+            # Re-sync: fill blanks from the connector, but never clobber a value already
+            # set (a Settings edit of institution/type/taxable must survive re-imports).
+            if row.institution is None and institution:
+                row.institution = institution
+            if row.account_type is None and account_type:
+                row.account_type = account_type
+            if row.tax_treatment is None and tax_treatment:
+                row.tax_treatment = tax_treatment
         out[acct.number] = row
     return out
 
@@ -185,6 +211,11 @@ def _replace_positions(
         security = securities.get(h.security_id)
         if account is None or security is None:  # pragma: no cover — connector pairs holding↔security
             continue
+        # Broker-native price/value (IBKR Flex markPrice / positionValue) — the
+        # valuation fallback when yfinance can't resolve a foreign listing. Derive a
+        # per-share price from the native market value when quantity is non-zero.
+        mv_local = h.market_value_local or None
+        market_price = (mv_local / h.quantity) if (mv_local and h.quantity) else None
         session.add(
             models.Position(
                 tenant_id=tenant_id,
@@ -193,6 +224,8 @@ def _replace_positions(
                 quantity=h.quantity,
                 avg_cost=h.avg_cost,
                 currency=h.currency,
+                market_price=market_price,
+                market_value_local=mv_local,
                 as_of=(h.as_of.date() if h.as_of is not None else date.today()),
             )
         )

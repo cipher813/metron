@@ -143,7 +143,11 @@ def parse_open_positions(root: ET.Element):
             source=SOURCE,
         )
         sec = CanonicalSecurity(
-            security_id=sid, ticker=ticker, currency=currency, asset_type=_asset_type(e.get("assetCategory", ""))
+            security_id=sid,
+            ticker=ticker,
+            currency=currency,
+            asset_type=_asset_type(e.get("assetCategory", "")),
+            exchange=(e.get("listingExchange") or e.get("exchange") or "").strip(),
         )
         out.append((holding, sec))
     return out

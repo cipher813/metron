@@ -31,9 +31,15 @@ export default async function TaxPage({ params }: { params: { id: string } }) {
 
       <h1 className="mt-3 text-lg font-semibold">Tax</h1>
       <p className="text-sm text-muted">
-        Per-lot holding-period term and unrealized P&amp;L (at the last close), with harvestable losses flagged.
-        Descriptive, not advice.
+        Per-lot holding-period term and unrealized P&amp;L (at the last close, in {ccy}), with harvestable losses
+        flagged. Taxable accounts only. Descriptive, not advice.
       </p>
+      {taxData.n_accounts_excluded > 0 ? (
+        <p className="mt-1 text-xs text-muted">
+          {taxData.n_accounts_excluded} tax-advantaged account{taxData.n_accounts_excluded === 1 ? "" : "s"} (IRA /
+          401(k) / Roth …) excluded — gains there are never taxed.
+        </p>
+      ) : null}
 
       {priced ? (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -54,7 +60,7 @@ export default async function TaxPage({ params }: { params: { id: string } }) {
           />
           <StatCard
             label="Harvestable loss"
-            value={money(taxData.harvestable_loss, ccy)}
+            value={money(taxData.harvestable_loss ?? 0, ccy)}
             hint="available to harvest"
           />
         </div>
@@ -68,20 +74,25 @@ export default async function TaxPage({ params }: { params: { id: string } }) {
         {taxData.lots.length === 0 ? (
           <Empty>No open lots.</Empty>
         ) : (
-          <Table head={["Ticker", "Opened", "Term", "Quantity", "Cost basis", "Market value", "Unrealized", "Harvest"]}>
+          <Table head={["Ticker", "Ccy", "Opened", "Term", "Quantity", "Cost basis", "Market value", "Unrealized", "Harvest"]}>
             {taxData.lots.map((l, i) => (
               <tr key={`${l.ticker}-${l.open_date}-${i}`} className="border-b border-line last:border-0">
                 <td className="px-4 py-2 font-medium">{l.ticker}</td>
+                <td className="px-4 py-2 text-muted">{l.currency}</td>
                 <td className="px-4 py-2 text-right text-muted">{isoDate(l.open_date)}</td>
                 <td className="px-4 py-2 text-right text-muted">{l.term === "Long-term" ? "LT" : l.term === "Short-term" ? "ST" : "?"}</td>
                 <td className="px-4 py-2 text-right tabular-nums">{quantity(l.quantity)}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{money(l.cost_basis, ccy)}</td>
+                <td className="px-4 py-2 text-right tabular-nums">{money(l.cost_basis, l.currency)}</td>
                 <td className="px-4 py-2 text-right tabular-nums">{l.market_value != null ? money(l.market_value, ccy) : "—"}</td>
                 <td className={`px-4 py-2 text-right tabular-nums ${signClass(l.unrealized_gain ?? 0)}`}>
                   {l.unrealized_gain != null ? signedMoney(l.unrealized_gain, ccy) : "—"}
                 </td>
                 <td className="px-4 py-2 text-right tabular-nums">
-                  {l.harvestable_loss > 0 ? <span className="text-negative">{money(l.harvestable_loss, ccy)}</span> : "—"}
+                  {(l.harvestable_loss ?? 0) > 0 ? (
+                    <span className="text-negative">{money(l.harvestable_loss as number, ccy)}</span>
+                  ) : (
+                    "—"
+                  )}
                 </td>
               </tr>
             ))}

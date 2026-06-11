@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from api.db import models
 from api.db.session import SessionLocal, create_all
-from api.services import analytics, performance
+from api.services import analytics, fx, performance
 from api.services import prices as price_service
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ class RefreshResult:
     symbols: int
     prices_updated: int
     snapshots_recorded: int
+    fx_rates_updated: int = 0
 
 
 def daily_refresh(session: Session, *, today: date | None = None) -> RefreshResult:
@@ -47,19 +48,31 @@ def daily_refresh(session: Session, *, today: date | None = None) -> RefreshResu
     """
     today = today or date.today()
     portfolios = session.scalars(select(models.Portfolio)).all()
-    total_symbols = total_updated = total_snaps = 0
+    total_symbols = total_updated = total_snaps = total_fx = 0
     for p in portfolios:
-        symbols = [h.ticker for h in analytics.holdings(session, p.tenant_id, p.id) if h.ticker]
+        held = analytics.holdings(session, p.tenant_id, p.id)
+        symbols = [h.ticker for h in held if h.ticker]
         updated = price_service.refresh_latest_prices(session, symbols) if symbols else 0
+        # Refresh FX for every non-base currency held, so foreign positions convert into
+        # the base-currency NAV instead of being dropped from the total.
+        base = p.base_currency or "USD"
+        currencies = sorted({h.currency for h in held if h.currency and h.currency != base})
+        fx_updated = fx.refresh_fx_rates(session, currencies, base=base) if currencies else 0
         snap = performance.record_snapshot(session, p.tenant_id, p.id, today=today)
         total_symbols += len(symbols)
         total_updated += updated
+        total_fx += fx_updated
         total_snaps += 1 if snap is not None else 0
         logger.info(
-            "portfolio %s: %d symbols, %d prices updated, snapshot=%s", p.id, len(symbols), updated, snap is not None
+            "portfolio %s: %d symbols, %d prices updated, %d fx rates, snapshot=%s",
+            p.id, len(symbols), updated, fx_updated, snap is not None,
         )
     return RefreshResult(
-        portfolios=len(portfolios), symbols=total_symbols, prices_updated=total_updated, snapshots_recorded=total_snaps
+        portfolios=len(portfolios),
+        symbols=total_symbols,
+        prices_updated=total_updated,
+        snapshots_recorded=total_snaps,
+        fx_rates_updated=total_fx,
     )
 
 
