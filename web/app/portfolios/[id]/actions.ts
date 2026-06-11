@@ -6,12 +6,17 @@
 
 import { revalidatePath } from "next/cache";
 import {
+  type AccountTagPatch,
   importFile,
   MetronApiError,
+  type Preferences,
+  putPreferences,
   refreshPrices,
   renamePortfolio,
   syncFlex,
   syncSnapTrade,
+  updateAccountTags,
+  updatePortfolio,
   type ImportResult,
 } from "@/lib/api";
 import { requireTenantId } from "@/lib/session";
@@ -93,6 +98,45 @@ export async function syncSnapTradeAction(portfolioId: string): Promise<ActionRe
     return { ok: true, message: summarize(result), result };
   } catch (e) {
     return { ok: false, message: errorMessage(e) };
+  }
+}
+
+export async function updateBaseCurrencyAction(portfolioId: string, currency: string): Promise<ActionResult> {
+  const ccy = currency.trim().toUpperCase();
+  if (ccy.length !== 3) return { ok: false, message: "Base currency must be a 3-letter ISO code." };
+  try {
+    const tenantId = await requireTenantId();
+    await updatePortfolio(tenantId, portfolioId, { base_currency: ccy });
+    revalidatePath(`/portfolios/${portfolioId}`, "layout");
+    return { ok: true, message: `Base currency set to ${ccy}.` };
+  } catch (e) {
+    return { ok: false, message: e instanceof MetronApiError ? e.message : "Update failed — backend reachable?" };
+  }
+}
+
+export async function updateAccountTagsAction(
+  portfolioId: string,
+  accountId: string,
+  patch: AccountTagPatch,
+): Promise<ActionResult> {
+  try {
+    const tenantId = await requireTenantId();
+    await updateAccountTags(tenantId, portfolioId, accountId, patch);
+    revalidatePath(`/portfolios/${portfolioId}`, "layout");
+    return { ok: true, message: "Account updated." };
+  } catch (e) {
+    return { ok: false, message: e instanceof MetronApiError ? e.message : "Update failed — backend reachable?" };
+  }
+}
+
+export async function savePreferencesAction(portfolioId: string, prefs: Preferences): Promise<ActionResult> {
+  try {
+    const tenantId = await requireTenantId();
+    await putPreferences(tenantId, portfolioId, prefs);
+    revalidatePath(`/portfolios/${portfolioId}/settings`);
+    return { ok: true, message: "Preferences saved." };
+  } catch (e) {
+    return { ok: false, message: e instanceof MetronApiError ? e.message : "Save failed — backend reachable?" };
   }
 }
 

@@ -69,6 +69,9 @@ export default async function PortfolioPage({ params }: { params: { id: string }
           <Link href={`/portfolios/${id}/transactions`} className="text-sm text-muted hover:text-ink">
             Transactions &amp; realized →
           </Link>
+          <Link href={`/portfolios/${id}/settings`} className="text-sm text-muted hover:text-ink">
+            Settings →
+          </Link>
           {plugins.map((p) => (
             <Link
               key={p.id}
@@ -113,6 +116,13 @@ export default async function PortfolioPage({ params }: { params: { id: string }
         <StatCard label="Accounts" value={String(summary.n_accounts)} />
       </div>
 
+      {summary.n_unconverted > 0 ? (
+        <p className="mt-2 text-xs text-muted">
+          {summary.n_unconverted} foreign holding{summary.n_unconverted === 1 ? "" : "s"} excluded from the{" "}
+          {ccy} totals — no FX rate cached yet. Refresh prices to fetch it.
+        </p>
+      ) : null}
+
       <Section title="Import" note="CSV / OFX / IBKR Flex — $0, no aggregator">
         <ImportPanel portfolioId={id} />
       </Section>
@@ -127,40 +137,54 @@ export default async function PortfolioPage({ params }: { params: { id: string }
           <Table
             head={
               priced
-                ? ["Ticker", "Quantity", "Avg cost", "Cost basis", "Last", "Market value", "Unrealized"]
-                : ["Ticker", "Quantity", "Avg cost", "Cost basis"]
+                ? ["Ticker", "Ccy", "Quantity", "Avg cost", "Cost basis", "Last", "Market value", "Unrealized"]
+                : ["Ticker", "Ccy", "Quantity", "Avg cost", "Cost basis"]
             }
           >
-            {holdings.map((h) => (
-              <tr key={h.ticker} className="border-b border-line last:border-0">
-                <td className="px-4 py-2 font-medium">{h.ticker}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{quantity(h.quantity)}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{money(h.avg_cost, ccy)}</td>
-                <td className="px-4 py-2 text-right tabular-nums">{money(h.cost_basis, ccy)}</td>
-                {priced ? (
-                  <>
-                    <td className="px-4 py-2 text-right tabular-nums text-muted">
-                      {h.last_price != null ? money(h.last_price, ccy) : "—"}
-                    </td>
-                    <td className="px-4 py-2 text-right tabular-nums">
-                      {h.market_value != null ? money(h.market_value, ccy) : "—"}
-                    </td>
-                    <td className={`px-4 py-2 text-right tabular-nums ${signClass(h.unrealized_gain ?? 0)}`}>
-                      {h.unrealized_gain != null ? (
-                        <>
-                          {signedMoney(h.unrealized_gain, ccy)}
-                          {h.unrealized_pct != null ? (
-                            <span className="ml-1 text-xs">({percent(h.unrealized_pct)})</span>
-                          ) : null}
-                        </>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                  </>
-                ) : null}
-              </tr>
-            ))}
+            {holdings.map((h) => {
+              // Native fields (avg cost / cost basis / last) render in the holding's own
+              // currency; market value + unrealized are converted to the base currency.
+              const foreign = h.currency !== ccy;
+              return (
+                <tr key={h.ticker} className="border-b border-line last:border-0">
+                  <td className="px-4 py-2 font-medium">{h.ticker}</td>
+                  <td className="px-4 py-2 text-muted">{h.currency}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{quantity(h.quantity)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{money(h.avg_cost, h.currency)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{money(h.cost_basis, h.currency)}</td>
+                  {priced ? (
+                    <>
+                      <td className="px-4 py-2 text-right tabular-nums text-muted">
+                        {h.last_price != null ? money(h.last_price, h.currency) : "—"}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums">
+                        {h.market_value != null ? (
+                          money(h.market_value, ccy)
+                        ) : foreign && h.market_value_local != null ? (
+                          <span className="text-muted" title={`No ${ccy} FX rate cached`}>
+                            {money(h.market_value_local, h.currency)}*
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className={`px-4 py-2 text-right tabular-nums ${signClass(h.unrealized_gain ?? 0)}`}>
+                        {h.unrealized_gain != null ? (
+                          <>
+                            {signedMoney(h.unrealized_gain, ccy)}
+                            {h.unrealized_pct != null ? (
+                              <span className="ml-1 text-xs">({percent(h.unrealized_pct)})</span>
+                            ) : null}
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    </>
+                  ) : null}
+                </tr>
+              );
+            })}
           </Table>
         )}
       </Section>
@@ -192,7 +216,7 @@ export default async function PortfolioPage({ params }: { params: { id: string }
         {accounts.length === 0 ? (
           <Empty>No connected accounts.</Empty>
         ) : (
-          <Table head={["Account", "Broker", "Currency"]}>
+          <Table head={["Account", "Institution", "Type", "Taxable", "Broker", "Currency"]}>
             {accounts.map((a) => (
               <tr key={a.account_id} className="border-b border-line last:border-0 hover:bg-slate-50">
                 <td className="px-4 py-2 font-medium">
@@ -200,6 +224,9 @@ export default async function PortfolioPage({ params }: { params: { id: string }
                     {a.name || a.external_id} <span aria-hidden className="text-muted">→</span>
                   </Link>
                 </td>
+                <td className="px-4 py-2 text-muted">{a.institution || "—"}</td>
+                <td className="px-4 py-2 text-muted">{a.account_type || "—"}</td>
+                <td className="px-4 py-2 text-muted">{a.taxable ? "Taxable" : "Tax-advantaged"}</td>
                 <td className="px-4 py-2 text-right text-muted">{a.broker}</td>
                 <td className="px-4 py-2 text-right text-muted">{a.currency}</td>
               </tr>

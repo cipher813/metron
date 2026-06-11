@@ -86,6 +86,12 @@ class Account(Base):
     external_id: Mapped[str] = mapped_column(String(120))   # broker-side account number
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
+    # Tagging — persisted from the connector snapshot (was discarded pre-multicurrency).
+    institution: Mapped[str | None] = mapped_column(String(120), nullable=True)  # "Fidelity", "Interactive Brokers"
+    account_type: Mapped[str | None] = mapped_column(String(60), nullable=True)  # "IRA", "Roth IRA", "Brokerage", …
+    tax_treatment: Mapped[str | None] = mapped_column(String(20), nullable=True)  # taxable | tax_deferred | tax_exempt
+    # Manual taxable override (Settings). NULL = auto-derive from tax_treatment/account_type.
+    taxable_override: Mapped[bool | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
     portfolio: Mapped[Portfolio] = relationship(back_populates="accounts")
@@ -103,6 +109,10 @@ class Security(Base):
     symbol: Mapped[str] = mapped_column(String(40), index=True)
     name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
+    exchange: Mapped[str | None] = mapped_column(String(20), nullable=True)  # broker listing exchange (e.g. SEHK)
+    # Symbol yfinance prices this under (foreign listings need an exchange suffix, e.g.
+    # 1299 → 1299.HK). Resolved at ingestion via prices.symbology; overridable from Settings.
+    yf_symbol: Mapped[str | None] = mapped_column(String(40), nullable=True)
     asset_class: Mapped[str | None] = mapped_column(String(40), nullable=True)  # equity | etf | cash | …
     sector: Mapped[str | None] = mapped_column(String(60), nullable=True)  # canonical GICS label; resolved lazily
     next_earnings_date: Mapped[date | None] = mapped_column(nullable=True)  # cached next earnings; refreshed on demand
@@ -146,6 +156,10 @@ class Position(Base):
     quantity: Mapped[float] = mapped_column(Numeric(28, 10), default=0)
     avg_cost: Mapped[float] = mapped_column(Numeric(28, 10), default=0)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
+    # Broker-reported native price / market value (IBKR Flex markPrice / positionValue).
+    # The valuation fallback when yfinance can't resolve a foreign listing. NULL = none reported.
+    market_price: Mapped[float | None] = mapped_column(Numeric(28, 10), nullable=True)
+    market_value_local: Mapped[float | None] = mapped_column(Numeric(28, 10), nullable=True)
     as_of: Mapped[date] = mapped_column(index=True)
 
     account: Mapped[Account] = relationship(back_populates="positions")
@@ -186,3 +200,36 @@ class NavSnapshot(Base):
     external_flow: Mapped[float] = mapped_column(Numeric(28, 10), default=0)
     spy_close: Mapped[float | None] = mapped_column(Numeric(28, 10), nullable=True)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class FxRate(Base):
+    """Global FX rate cache — ``rate`` is USD (the canonical base) per 1 unit of
+    ``currency`` for ``rate_date`` (e.g. HKD → 0.128). NOT tenant-scoped: one fetch of
+    ``HKDUSD=X`` serves every tenant, mirroring ``price_bars``. USD itself is never
+    stored (its rate is the identity 1.0)."""
+
+    __tablename__ = "fx_rates"
+    __table_args__ = (UniqueConstraint("currency", "rate_date", name="uq_fxrate_ccy_date"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    currency: Mapped[str] = mapped_column(String(3), index=True)  # ISO-4217 quote currency
+    base: Mapped[str] = mapped_column(String(3), default="USD")   # rate is `base` per 1 `currency`
+    rate_date: Mapped[date] = mapped_column(index=True)
+    rate: Mapped[float] = mapped_column(Numeric(28, 10))
+
+
+class InvestorPreferences(Base):
+    """Per-portfolio investor preferences set from the public Settings page. One row
+    per portfolio (tenant-scoped). All fields nullable so a portfolio without a saved
+    preference simply uses defaults — the row is created lazily on first PUT."""
+
+    __tablename__ = "investor_preferences"
+    __table_args__ = (UniqueConstraint("tenant_id", "portfolio_id", name="uq_investorpref_portfolio"),)
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    tenant_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tenants.id", ondelete="CASCADE"), index=True)
+    portfolio_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("portfolios.id", ondelete="CASCADE"), index=True)
+    risk_tolerance: Mapped[str | None] = mapped_column(String(20), nullable=True)  # conservative | moderate | aggressive
+    objective: Mapped[str | None] = mapped_column(String(20), nullable=True)  # income | growth | balanced
+    notes: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())

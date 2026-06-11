@@ -15,9 +15,11 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from api.services import analytics
+from api.db import models
+from api.services import account_meta, analytics, fx
 from api.services import prices as price_service
 from portfolio_analytics.domain.tax import LONG_TERM, classify_term
 from portfolio_analytics.domain.tax import harvestable_loss as compute_harvestable
@@ -28,31 +30,62 @@ class TaxLot:
     ticker: str
     open_date: date
     quantity: float
-    cost_basis: float
+    currency: str
+    cost_basis: float            # native total cost basis (lot identity is native)
     term: str
+    # Base-currency valuation (None when unpriced, or when the FX rate isn't cached).
+    cost_basis_base: float | None
     market_value: float | None
     unrealized_gain: float | None
-    harvestable_loss: float
+    harvestable_loss: float | None
 
 
 @dataclass
 class TaxSummary:
     as_of: date
+    base_currency: str
     n_lots: int
     n_priced: int
+    # Base-currency unrealized totals (None until at least one lot is priced + convertible).
     unrealized_st: float | None
     unrealized_lt: float | None
     unrealized_total: float | None
-    harvestable_loss: float
+    harvestable_loss: float | None
+    n_accounts_excluded: int = 0  # tax-advantaged accounts filtered out of this view
     lots: list[TaxLot] = field(default_factory=list)
 
 
-def tax_lots(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, *, today: date) -> TaxSummary:
-    """Per-lot tax view: term + unrealized P&L (at the latest cached close) + harvestable
-    losses. Short-term and Unknown terms aggregate into the short-term bucket (the
-    conservative assumption). Totals are None until at least one lot is priced."""
-    ledger = analytics.load_ledger(session, tenant_id, portfolio_id)
+def tax_lots(
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    *,
+    today: date,
+    taxable_only: bool = True,
+) -> TaxSummary:
+    """Per-lot tax view: term + unrealized P&L (at the latest cached close, converted to
+    the portfolio base currency) + harvestable losses. Short-term and Unknown terms
+    aggregate into the short-term bucket (the conservative assumption). Base-currency
+    totals are None until at least one lot is both priced AND convertible.
+
+    ``taxable_only`` (default) restricts the lots to taxable accounts — unrealized gains
+    inside an IRA/401(k)/Roth are never taxed, so harvesting/​income figures over them
+    would mislead. Tax-advantaged accounts are excluded and counted."""
+    base = analytics._base_currency(session, portfolio_id)
+    account_ids = None
+    n_excluded = 0
+    if taxable_only:
+        account_ids = account_meta.taxable_account_ids(session, tenant_id, portfolio_id)
+        n_total = session.scalar(
+            select(func.count())
+            .select_from(models.Account)
+            .where(models.Account.tenant_id == tenant_id, models.Account.portfolio_id == portfolio_id)
+        )
+        n_excluded = int(n_total or 0) - len(account_ids)
+    ledger = analytics.load_ledger(session, tenant_id, portfolio_id, account_ids=account_ids)
     prices = price_service.latest_close_by_symbol(session, list(ledger.open_lots))
+    ccy_by_ticker = analytics._currency_by_symbol(session, list(ledger.open_lots))
+    fx_rates = fx.rates_to_base(session, list(ccy_by_ticker.values()), base=base)
 
     lots: list[TaxLot] = []
     st = lt = 0.0
@@ -60,16 +93,18 @@ def tax_lots(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, *,
     any_priced = False
     for ticker, open_lots in ledger.open_lots.items():
         point = prices.get(ticker)
+        currency = ccy_by_ticker.get(ticker, "USD")
+        rate = fx_rates.get(currency)
         for lot in open_lots:
             if lot.quantity <= 0:
                 continue
-            cost = lot.cost_per_share * lot.quantity
+            cost = lot.cost_per_share * lot.quantity  # native
+            cost_base = cost * rate if rate is not None else None
             term = classify_term((today - lot.open_date).days)
-            market_value = unrealized = None
-            harvestable = 0.0
-            if point is not None:
-                market_value = point.close * lot.quantity
-                unrealized = market_value - cost
+            market_value = unrealized = harvestable = None
+            if point is not None and rate is not None:
+                market_value = point.close * lot.quantity * rate  # base
+                unrealized = market_value - (cost_base or 0.0)
                 harvestable = compute_harvestable(unrealized)
                 any_priced = True
                 if term == LONG_TERM:
@@ -82,8 +117,10 @@ def tax_lots(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, *,
                     ticker=ticker,
                     open_date=lot.open_date,
                     quantity=lot.quantity,
+                    currency=currency,
                     cost_basis=cost,
                     term=term,
+                    cost_basis_base=cost_base,
                     market_value=market_value,
                     unrealized_gain=unrealized,
                     harvestable_loss=harvestable,
@@ -92,11 +129,13 @@ def tax_lots(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, *,
     lots.sort(key=lambda x: (x.ticker, x.open_date))
     return TaxSummary(
         as_of=today,
+        base_currency=base,
         n_lots=len(lots),
         n_priced=sum(1 for x in lots if x.market_value is not None),
         unrealized_st=st if any_priced else None,
         unrealized_lt=lt if any_priced else None,
         unrealized_total=(st + lt) if any_priced else None,
-        harvestable_loss=harvest_total,
+        harvestable_loss=harvest_total if any_priced else None,
+        n_accounts_excluded=n_excluded,
         lots=lots,
     )

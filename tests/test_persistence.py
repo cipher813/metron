@@ -72,3 +72,30 @@ def test_cash_transaction_has_null_security(db_session):
     txn = db_session.scalars(select(models.Transaction)).one()
     assert txn.txn_type == "DEPOSIT"
     assert txn.security_id is None
+
+
+def test_persists_foreign_symbology_and_account_metadata(db_session):
+    """A snapshot-sourced (Flex) holding persists the listing exchange + resolved
+    yfinance symbol, the account's institution/type/tax_treatment, and the broker's
+    native market value — all of which were discarded before the multicurrency work."""
+    from datetime import datetime
+
+    from portfolio_analytics.ingestion.base import ConnectorSnapshot
+    from portfolio_analytics.ingestion.schema import CanonicalAccount, CanonicalHolding, CanonicalSecurity
+
+    tenant_id, portfolio_id = _make_portfolio(db_session)
+    snapshot = ConnectorSnapshot(
+        source="ibkr_flex",
+        accounts=[CanonicalAccount(number="U1", institution="Interactive Brokers", account_type="Roth IRA", tax_treatment="tax_exempt", currency="USD")],
+        securities=[CanonicalSecurity(security_id="EQ:1299:HKD", ticker="1299", currency="HKD", exchange="SEHK")],
+        holdings=[CanonicalHolding(account_number="U1", security_id="EQ:1299:HKD", quantity=100, avg_cost=60, cost_basis=6000, market_value_local=7000.0, currency="HKD", as_of=datetime(2026, 6, 1))],
+    )
+    persist_snapshot(db_session, tenant_id=tenant_id, portfolio_id=portfolio_id, snapshot=snapshot)
+
+    sec = db_session.scalars(select(models.Security).where(models.Security.symbol == "1299")).one()
+    assert sec.exchange == "SEHK" and sec.yf_symbol == "1299.HK"
+    acct = db_session.scalars(select(models.Account).where(models.Account.external_id == "U1")).one()
+    assert acct.institution == "Interactive Brokers" and acct.account_type == "Roth IRA" and acct.tax_treatment == "tax_exempt"
+    pos = db_session.scalars(select(models.Position)).one()
+    assert float(pos.market_value_local) == 7000.0
+    assert float(pos.market_price) == 70.0  # 7000 / 100

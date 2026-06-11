@@ -62,6 +62,7 @@ class CanonicalSecurity:
     currency: str = "USD"  # ISO-4217
     asset_type: str = ASSET_EQUITY
     security_id_type: str = "TICKER"  # TICKER | CUSIP | ISIN | CONID
+    exchange: str = ""  # broker listing exchange (e.g. "SEHK", "LSE") — drives yfinance symbology
 
 
 @dataclass(frozen=True)

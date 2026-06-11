@@ -59,7 +59,9 @@ def record_snapshot(
     if not priced:
         return None  # can't snapshot a NAV we can't value — never fabricate one
     nav = sum(h.market_value for h in priced)
-    cost_basis = sum(h.cost_basis for h in held)
+    # Base-currency cost basis (matches the base-currency NAV); a holding with no cached
+    # FX rate is excluded rather than summed at native face value.
+    cost_basis = sum(h.cost_basis_base for h in held if h.cost_basis_base is not None)
     flow = _external_flow_on(session, tenant_id, portfolio_id, today)
     spy_point = fetch_latest_closes(["SPY"], source=source).get("SPY")
     row = _upsert_snapshot(

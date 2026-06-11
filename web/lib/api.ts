@@ -12,11 +12,16 @@ export type Portfolio = { id: string; name: string; base_currency: string };
 export type Holding = {
   ticker: string;
   quantity: number;
-  avg_cost: number;
-  cost_basis: number;
+  avg_cost: number; // native per-share cost
+  cost_basis: number; // native total cost basis
+  currency: string;
+  fx_rate: number | null; // base per 1 unit of `currency` (1.0 for USD)
   // Null until prices are refreshed; populated from the cached EOD close.
+  // `_local` fields are native; market_value / cost_basis_base are base-currency.
   last_price: number | null;
   last_price_date: string | null;
+  market_value_local: number | null;
+  cost_basis_base: number | null;
   market_value: number | null;
   unrealized_gain: number | null;
   unrealized_pct: number | null;
@@ -38,6 +43,10 @@ export type Account = {
   external_id: string;
   name: string;
   currency: string;
+  institution: string | null;
+  account_type: string | null;
+  tax_treatment: string | null;
+  taxable: boolean;
 };
 
 export type AccountDetail = {
@@ -82,6 +91,7 @@ export type Summary = {
   taxable_income: number;
   market_value: number | null;
   unrealized_gain: number | null;
+  n_unconverted: number;
 };
 
 export type PriceRefreshResult = {
@@ -140,12 +150,16 @@ async function get<T>(tenantId: string, path: string): Promise<T> {
 export const getPortfolios = (tenantId: string) => get<Portfolio[]>(tenantId, "/portfolios");
 export const getPortfolio = (tenantId: string, id: string) => get<Portfolio>(tenantId, `/portfolios/${id}`);
 
-/** Rename a portfolio (PATCH). Empty names are rejected by the backend (422). */
-export async function renamePortfolio(tenantId: string, id: string, name: string): Promise<Portfolio> {
+/** Update a portfolio's name and/or base currency (PATCH). Empty/no-op rejected (422). */
+export async function updatePortfolio(
+  tenantId: string,
+  id: string,
+  patch: { name?: string; base_currency?: string },
+): Promise<Portfolio> {
   const res = await fetch(`${API_URL}/portfolios/${id}`, {
     method: "PATCH",
     headers: { "X-Tenant-Id": tenantId, "Content-Type": "application/json" },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(patch),
     cache: "no-store",
   });
   if (!res.ok) {
@@ -159,6 +173,10 @@ export async function renamePortfolio(tenantId: string, id: string, name: string
   }
   return res.json() as Promise<Portfolio>;
 }
+
+/** Rename a portfolio (PATCH). Empty names are rejected by the backend (422). */
+export const renamePortfolio = (tenantId: string, id: string, name: string) =>
+  updatePortfolio(tenantId, id, { name });
 export const getSummary = (tenantId: string, id: string) => get<Summary>(tenantId, `/portfolios/${id}/summary`);
 export const getHoldings = (tenantId: string, id: string) => get<Holding[]>(tenantId, `/portfolios/${id}/holdings`);
 export const getIncome = (tenantId: string, id: string) => get<IncomeYear[]>(tenantId, `/portfolios/${id}/income`);
@@ -195,21 +213,25 @@ export type TaxLot = {
   ticker: string;
   open_date: string;
   quantity: number;
-  cost_basis: number;
+  currency: string;
+  cost_basis: number; // native
   term: string;
-  market_value: number | null;
-  unrealized_gain: number | null;
-  harvestable_loss: number;
+  cost_basis_base: number | null;
+  market_value: number | null; // base
+  unrealized_gain: number | null; // base
+  harvestable_loss: number | null;
 };
 
 export type Tax = {
   as_of: string;
+  base_currency: string;
   n_lots: number;
   n_priced: number;
   unrealized_st: number | null;
   unrealized_lt: number | null;
   unrealized_total: number | null;
-  harvestable_loss: number;
+  harvestable_loss: number | null;
+  n_accounts_excluded: number;
   lots: TaxLot[];
 };
 
@@ -431,6 +453,61 @@ export async function refreshPrices(tenantId: string, id: string): Promise<Price
     throw new MetronApiError(res.status, `price refresh → ${res.status}`);
   }
   return res.json() as Promise<PriceRefreshResult>;
+}
+
+// --- settings (account tags + investor preferences) ------------------------
+
+export type AccountTagPatch = {
+  institution?: string | null;
+  account_type?: string | null;
+  taxable_override?: boolean | null;
+};
+
+/** Edit an account's tags (institution / type / taxable override). Returns the
+ * account with its recomputed `taxable` status. Omitted fields are left as-is. */
+export async function updateAccountTags(
+  tenantId: string,
+  id: string,
+  accountId: string,
+  patch: AccountTagPatch,
+): Promise<Account> {
+  const res = await fetch(`${API_URL}/portfolios/${id}/accounts/${accountId}`, {
+    method: "PATCH",
+    headers: { "X-Tenant-Id": tenantId, "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new MetronApiError(res.status, `update account → ${res.status}`);
+  }
+  return res.json() as Promise<Account>;
+}
+
+export type Preferences = {
+  risk_tolerance: string | null;
+  objective: string | null;
+  notes: string | null;
+};
+
+export const getPreferences = (tenantId: string, id: string) =>
+  get<Preferences>(tenantId, `/portfolios/${id}/preferences`);
+
+/** Create or update the portfolio's investor preferences (PUT, idempotent). */
+export async function putPreferences(
+  tenantId: string,
+  id: string,
+  prefs: Preferences,
+): Promise<Preferences> {
+  const res = await fetch(`${API_URL}/portfolios/${id}/preferences`, {
+    method: "PUT",
+    headers: { "X-Tenant-Id": tenantId, "Content-Type": "application/json" },
+    body: JSON.stringify(prefs),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new MetronApiError(res.status, `save preferences → ${res.status}`);
+  }
+  return res.json() as Promise<Preferences>;
 }
 
 // ---------------------------------------------------------------------------

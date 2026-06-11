@@ -25,7 +25,8 @@ from sqlalchemy.orm import Session
 from api.config import settings
 from api.db import models
 from api.db.session import get_session
-from api.services import analytics, attribution, calendar, performance, persistence, risk, tax
+from api.services import account_meta, analytics, attribution, calendar, performance, persistence, risk, tax
+from api.services import fx as fx_service
 from api.services import prices as price_service
 from portfolio_analytics.broker_io.csv_import import parse_transactions_csv
 from portfolio_analytics.broker_io.file_import import FileImportError, FileImportResult
@@ -53,7 +54,39 @@ class PortfolioOut(BaseModel):
 
 
 class PortfolioRename(BaseModel):
-    name: str
+    # Both optional so the Settings page can PATCH name and/or base currency; at least
+    # one must be provided.
+    name: str | None = None
+    base_currency: str | None = None
+
+
+class AccountTagsIn(BaseModel):
+    """Editable account tags from the Settings page. The PATCH handler reads
+    ``model_fields_set`` so an omitted field is left as-is, while an explicitly-sent
+    field (including ``taxable_override: null``, which reverts to auto-derivation) is
+    applied."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    institution: str | None = None
+    account_type: str | None = None
+    taxable_override: bool | None = None
+
+
+class PreferencesIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    risk_tolerance: str | None = None
+    objective: str | None = None
+    notes: str | None = None
+
+
+class PreferencesOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    risk_tolerance: str | None = None
+    objective: str | None = None
+    notes: str | None = None
 
 
 class HoldingOut(BaseModel):
@@ -61,11 +94,16 @@ class HoldingOut(BaseModel):
 
     ticker: str
     quantity: float
-    avg_cost: float
-    cost_basis: float
+    avg_cost: float            # native per-share cost
+    cost_basis: float          # native total cost basis
+    currency: str = "USD"
+    fx_rate: float | None = None          # base per 1 unit of `currency` (1.0 for USD)
     # Null on the price-free path; populated from the cached close (see prices/refresh).
+    # ``_local`` fields are native; the bare market_value/cost_basis_base are base-currency.
     last_price: float | None = None
     last_price_date: date | None = None
+    market_value_local: float | None = None
+    cost_basis_base: float | None = None
     market_value: float | None = None
     unrealized_gain: float | None = None
     unrealized_pct: float | None = None
@@ -117,6 +155,10 @@ class AccountOut(BaseModel):
     external_id: str
     name: str
     currency: str
+    institution: str | None = None
+    account_type: str | None = None
+    tax_treatment: str | None = None
+    taxable: bool = True
 
 
 class SummaryOut(BaseModel):
@@ -134,6 +176,7 @@ class SummaryOut(BaseModel):
     taxable_income: float
     market_value: float | None = None
     unrealized_gain: float | None = None
+    n_unconverted: int = 0
 
 
 class AccountDetailOut(BaseModel):
@@ -194,23 +237,27 @@ class TaxLotOut(BaseModel):
     ticker: str
     open_date: date
     quantity: float
-    cost_basis: float
+    currency: str = "USD"
+    cost_basis: float                    # native total cost basis
     term: str
-    market_value: float | None
+    cost_basis_base: float | None = None  # base-currency cost basis
+    market_value: float | None           # base-currency market value
     unrealized_gain: float | None
-    harvestable_loss: float
+    harvestable_loss: float | None
 
 
 class TaxOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     as_of: date
+    base_currency: str = "USD"
     n_lots: int
     n_priced: int
     unrealized_st: float | None
     unrealized_lt: float | None
     unrealized_total: float | None
-    harvestable_loss: float
+    harvestable_loss: float | None
+    n_accounts_excluded: int = 0
     lots: list[TaxLotOut]
 
 
@@ -369,19 +416,67 @@ def get_portfolio(portfolio: models.Portfolio = Depends(_owned_portfolio)) -> mo
 
 
 @router.patch("/{portfolio_id}", response_model=PortfolioOut)
-def rename_portfolio(
+def update_portfolio(
     body: PortfolioRename,
     portfolio: models.Portfolio = Depends(_owned_portfolio),
     session: Session = Depends(get_session),
 ) -> models.Portfolio:
-    """Rename a portfolio. Trims surrounding whitespace; an empty name is rejected (422)."""
-    name = body.name.strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="Portfolio name cannot be empty")
-    portfolio.name = name
+    """Update a portfolio's name and/or base (reporting) currency. Trims whitespace; an
+    empty name or no-op body is rejected (422). Base currency is upper-cased ISO-4217."""
+    if body.name is None and body.base_currency is None:
+        raise HTTPException(status_code=422, detail="Nothing to update")
+    if body.name is not None:
+        name = body.name.strip()
+        if not name:
+            raise HTTPException(status_code=422, detail="Portfolio name cannot be empty")
+        portfolio.name = name
+    if body.base_currency is not None:
+        ccy = body.base_currency.strip().upper()
+        if len(ccy) != 3:
+            raise HTTPException(status_code=422, detail="Base currency must be a 3-letter ISO-4217 code")
+        portfolio.base_currency = ccy
     session.commit()
     session.refresh(portfolio)
     return portfolio
+
+
+@router.get("/{portfolio_id}/preferences", response_model=PreferencesOut)
+def get_preferences(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> models.InvestorPreferences | PreferencesOut:
+    """The portfolio's saved investor preferences (defaults when none saved yet)."""
+    pref = session.scalars(
+        select(models.InvestorPreferences).where(
+            models.InvestorPreferences.tenant_id == portfolio.tenant_id,
+            models.InvestorPreferences.portfolio_id == portfolio.id,
+        )
+    ).first()
+    return pref or PreferencesOut()
+
+
+@router.put("/{portfolio_id}/preferences", response_model=PreferencesOut)
+def put_preferences(
+    body: PreferencesIn,
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> models.InvestorPreferences:
+    """Create or update the portfolio's investor preferences (one row per portfolio)."""
+    pref = session.scalars(
+        select(models.InvestorPreferences).where(
+            models.InvestorPreferences.tenant_id == portfolio.tenant_id,
+            models.InvestorPreferences.portfolio_id == portfolio.id,
+        )
+    ).first()
+    if pref is None:
+        pref = models.InvestorPreferences(tenant_id=portfolio.tenant_id, portfolio_id=portfolio.id)
+        session.add(pref)
+    pref.risk_tolerance = (body.risk_tolerance or "").strip() or None
+    pref.objective = (body.objective or "").strip() or None
+    pref.notes = (body.notes or "").strip() or None
+    session.commit()
+    session.refresh(pref)
+    return pref
 
 
 def _owned_account(
@@ -402,6 +497,39 @@ def _owned_account(
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return account
+
+
+@router.patch("/{portfolio_id}/accounts/{account_id}", response_model=AccountOut)
+def update_account_tags(
+    body: AccountTagsIn,
+    account: models.Account = Depends(_owned_account),
+    session: Session = Depends(get_session),
+) -> analytics.AccountInfo:
+    """Edit an account's tags (institution / type / taxable override) from Settings.
+
+    Only fields present in the request body are changed (omitted = leave as-is);
+    ``taxable_override`` may be set to ``null`` to revert to auto-derivation. Returns the
+    account with its recomputed ``taxable`` status."""
+    fields = body.model_fields_set
+    if "institution" in fields:
+        account.institution = (body.institution or "").strip() or None
+    if "account_type" in fields:
+        account.account_type = (body.account_type or "").strip() or None
+    if "taxable_override" in fields:
+        account.taxable_override = body.taxable_override
+    session.commit()
+    session.refresh(account)
+    return analytics.AccountInfo(
+        account_id=account.id,
+        broker=account.broker,
+        external_id=account.external_id,
+        name=account.name or "",
+        currency=account.currency,
+        institution=account.institution,
+        account_type=account.account_type,
+        tax_treatment=account.tax_treatment,
+        taxable=account_meta.is_taxable(account),
+    )
 
 
 def _summarize(snapshot, persisted: persistence.PersistResult, *, parsed: int, skipped: int, errors) -> ImportOut:
@@ -565,6 +693,12 @@ def refresh_prices(
     held = analytics.holdings(session, portfolio.tenant_id, portfolio.id)
     symbols = [h.ticker for h in held if h.ticker]
     updated = price_service.refresh_latest_prices(session, symbols)
+    # Refresh FX for every non-base currency held, so foreign positions convert into the
+    # base-currency NAV/market value instead of being dropped from the totals.
+    base = portfolio.base_currency or "USD"
+    currencies = sorted({h.currency for h in held if h.currency and h.currency != base})
+    if currencies:
+        fx_service.refresh_fx_rates(session, currencies, base=base)
     # Record today's NAV snapshot off the freshly-cached prices (the forward-recorded
     # performance series). None when nothing could be priced.
     snap = performance.record_snapshot(session, portfolio.tenant_id, portfolio.id, today=date.today())
@@ -640,13 +774,18 @@ def reconstruct_performance(
 
 @router.get("/{portfolio_id}/tax", response_model=TaxOut)
 def get_tax(
+    taxable_only: bool = True,
     portfolio: models.Portfolio = Depends(_owned_portfolio),
     session: Session = Depends(get_session),
 ) -> tax.TaxSummary:
-    """Per-lot tax view — holding-period term, unrealized P&L at the latest cached
-    close, and harvestable losses. Unrealized totals are null until prices are cached
+    """Per-lot tax view — holding-period term, unrealized P&L (in the base currency) at
+    the latest cached close, and harvestable losses. Defaults to **taxable accounts
+    only** (gains in an IRA/401(k)/Roth are never taxed); pass ``taxable_only=false`` to
+    include tax-advantaged accounts. Unrealized totals are null until prices are cached
     (refresh prices first); cost basis + term show regardless."""
-    return tax.tax_lots(session, portfolio.tenant_id, portfolio.id, today=date.today())
+    return tax.tax_lots(
+        session, portfolio.tenant_id, portfolio.id, today=date.today(), taxable_only=taxable_only
+    )
 
 
 @router.get("/{portfolio_id}/risk", response_model=RiskOut)

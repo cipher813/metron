@@ -42,36 +42,70 @@ def _security_ids_by_symbol(session: Session, symbols: list[str]) -> dict[str, u
     return out
 
 
+def _securities_by_symbol(session: Session, symbols: list[str]) -> dict[str, models.Security]:
+    """Resolve held symbols to their global Security row (first by id per symbol, like
+    ``_security_ids_by_symbol``). Carries ``currency`` + ``yf_symbol`` so the fetch can
+    use the yfinance-shaped symbol (``1299`` → ``1299.HK``) and the cached bar can be
+    stamped with the instrument's native currency rather than a USD default."""
+    rows = session.scalars(
+        select(models.Security)
+        .where(models.Security.symbol.in_(symbols))
+        .order_by(models.Security.symbol, models.Security.id)
+    ).all()
+    out: dict[str, models.Security] = {}
+    for row in rows:
+        out.setdefault(row.symbol, row)  # first row per symbol — stable
+    return out
+
+
+def _yf_symbol(sec: models.Security) -> str:
+    """The symbol to price ``sec`` under — its stored ``yf_symbol`` (foreign listings
+    carry an exchange suffix) falling back to the bare symbol (US/USD)."""
+    return sec.yf_symbol or sec.symbol
+
+
 def refresh_latest_prices(session: Session, symbols: list[str], *, source: PriceSource | None = None) -> int:
     """Fetch the latest close per symbol and upsert it into ``price_bars``.
 
-    Idempotent on (security_id, bar_date): re-refreshing the same session's close
-    updates the existing bar rather than duplicating it. Only symbols that (a) have a
-    ``securities`` row and (b) the source could price are written. Returns the number
-    of bars upserted."""
+    Fetches under each security's ``yf_symbol`` (so foreign listings like ``1299.HK``
+    resolve), then writes the bar back against the stored symbol's security, stamped
+    with that security's native currency. Idempotent on (security_id, bar_date). Only
+    symbols that (a) have a ``securities`` row and (b) the source could price are
+    written. Returns the number of bars upserted."""
     symbols = [s for s in dict.fromkeys(symbols) if s]
     if not symbols:
         return 0
-    closes = fetch_latest_closes(symbols, source=source)
+    secs = _securities_by_symbol(session, symbols)
+    if not secs:
+        return 0
+    # yfinance-shaped symbol → Security (collapse duplicates, first wins).
+    fetch_targets: dict[str, models.Security] = {}
+    for sec in secs.values():
+        fetch_targets.setdefault(_yf_symbol(sec), sec)
+    closes = fetch_latest_closes(list(fetch_targets), source=source)
     if not closes:
         return 0
-    sec_by_symbol = _security_ids_by_symbol(session, list(closes))
 
     written = 0
-    for symbol, point in closes.items():
-        sec_id = sec_by_symbol.get(symbol)
-        if sec_id is None:
+    for yf_sym, point in closes.items():
+        sec = fetch_targets.get(yf_sym)
+        if sec is None:
             continue  # not a held security in this DB — nothing to value
         existing = session.scalars(
             select(models.PriceBar).where(
-                models.PriceBar.security_id == sec_id,
+                models.PriceBar.security_id == sec.id,
                 models.PriceBar.bar_date == point.bar_date,
             )
         ).first()
         if existing is None:
-            session.add(models.PriceBar(security_id=sec_id, bar_date=point.bar_date, close=point.close))
+            session.add(
+                models.PriceBar(
+                    security_id=sec.id, bar_date=point.bar_date, close=point.close, currency=sec.currency
+                )
+            )
         else:
             existing.close = point.close
+            existing.currency = sec.currency
         written += 1
     session.commit()
     return written
@@ -121,11 +155,14 @@ def backfill_prices(
     symbols = [s for s in dict.fromkeys(symbols) if s]
     if not symbols or start > end:
         return 0
-    history = fetch_close_history(symbols, start, end, source=source)
-    if not history:
+    secs = _securities_by_symbol(session, symbols)
+    if not secs:
         return 0
-    sec_by_symbol = _security_ids_by_symbol(session, list(history))
-    if not sec_by_symbol:
+    fetch_targets: dict[str, models.Security] = {}
+    for sec in secs.values():
+        fetch_targets.setdefault(_yf_symbol(sec), sec)
+    history = fetch_close_history(list(fetch_targets), start, end, source=source)
+    if not history:
         return 0
     # Preload the (security, day) bars already cached for these securities so the
     # backfill is one query + plain inserts, not a select-per-day. Preload ALL dates
@@ -133,7 +170,7 @@ def backfill_prices(
     # the requested window, or a prior refresh may have written a bar the window
     # doesn't cover — a window-filtered preload would miss those and the insert would
     # then hit the (security, day) unique constraint.
-    sec_ids = list(sec_by_symbol.values())
+    sec_ids = [sec.id for sec in fetch_targets.values()]
     existing = {
         (sid, bd)
         for sid, bd in session.execute(
@@ -143,15 +180,19 @@ def backfill_prices(
         ).all()
     }
     inserted = 0
-    for symbol, series in history.items():
-        sec_id = sec_by_symbol.get(symbol)
-        if sec_id is None:
+    for yf_sym, series in history.items():
+        sec = fetch_targets.get(yf_sym)
+        if sec is None:
             continue
         for point in series:
-            if (sec_id, point.bar_date) in existing:
+            if (sec.id, point.bar_date) in existing:
                 continue
-            session.add(models.PriceBar(security_id=sec_id, bar_date=point.bar_date, close=point.close))
-            existing.add((sec_id, point.bar_date))
+            session.add(
+                models.PriceBar(
+                    security_id=sec.id, bar_date=point.bar_date, close=point.close, currency=sec.currency
+                )
+            )
+            existing.add((sec.id, point.bar_date))
             inserted += 1
     session.commit()
     return inserted
