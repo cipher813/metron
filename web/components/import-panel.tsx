@@ -8,9 +8,9 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 import {
   importCsvAction,
   importOfxAction,
-  includeSnapTradeConnectionAction,
   listSnapTradeConnectionsAction,
   removeSnapTradeConnectionAction,
+  setSnapTradeExclusionAction,
   snapTradeConnectUrlAction,
   syncFlexAction,
   syncSnapTradeAction,
@@ -168,9 +168,9 @@ function SnapTradeCard({ portfolioId }: { portfolioId: string }) {
     });
   }
 
-  function include(c: SnapTradeConnections["connections"][number]) {
+  function setExcluded(c: SnapTradeConnections["connections"][number], excluded: boolean) {
     startBusy(async () => {
-      const r = await includeSnapTradeConnectionAction(portfolioId, c.id);
+      const r = await setSnapTradeExclusionAction(portfolioId, c.id, excluded);
       setConnMsg(r.message);
       if (r.ok) {
         const next = await listSnapTradeConnectionsAction(portfolioId);
@@ -200,7 +200,7 @@ function SnapTradeCard({ portfolioId }: { portfolioId: string }) {
     <div className="rounded-lg border border-line p-4">
       <div className="text-sm font-medium">SnapTrade</div>
       <p className="mt-1 text-xs text-muted">
-        Syncs every linked brokerage (Settings → sync institutions filters them). No file needed.
+        Syncs every linked brokerage. Exclude one only if it&apos;s sourced elsewhere (e.g. IBKR via Flex).
       </p>
       {conns ? (
         <ul className="mt-2 space-y-1 text-xs">
@@ -214,19 +214,21 @@ function SnapTradeCard({ portfolioId }: { portfolioId: string }) {
                   <span className={c.disabled ? "text-negative" : "text-muted"}>
                     {c.n_accounts} acct{c.n_accounts === 1 ? "" : "s"}
                     {c.disabled ? " · reconnect needed" : ""}
-                    {!c.allowed ? " · filtered out" : ""}
+                    {c.excluded ? " · excluded" : ""}
                   </span>
-                  {!c.allowed ? (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => include(c)}
-                      className="text-xs underline hover:text-ink disabled:opacity-50"
-                      title="Add this connection's institutions to the sync allowlist (uses the exact strings SnapTrade reports)"
-                    >
-                      Include in sync
-                    </button>
-                  ) : null}
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setExcluded(c, !c.excluded)}
+                    className="text-xs underline hover:text-ink disabled:opacity-50"
+                    title={
+                      c.excluded
+                        ? "Include this connection in the sync again"
+                        : "Skip this connection on sync — for a broker sourced elsewhere (e.g. IBKR via Flex)"
+                    }
+                  >
+                    {c.excluded ? "Include" : "Exclude"}
+                  </button>
                   {c.disabled ? (
                     <button
                       type="button"

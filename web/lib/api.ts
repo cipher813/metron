@@ -457,9 +457,9 @@ export async function syncFlex(tenantId: string, id: string, token: string, quer
   return readResult(res, "IBKR Flex sync");
 }
 
-/** Sync the operator's linked SnapTrade brokerages into a portfolio (filtered to the
- * portfolio's Settings institution allowlist). Personal/single-operator only — 404
- * when the deployment hasn't enabled it. */
+/** Sync the operator's linked SnapTrade brokerages into a portfolio (every linked
+ * connection, minus any the portfolio has excluded). Personal/single-operator only —
+ * 404 when the deployment hasn't enabled it. */
 export async function syncSnapTrade(tenantId: string, id: string): Promise<ImportResult> {
   const res = await fetch(`${API_URL}/portfolios/${id}/import/snaptrade`, {
     method: "POST",
@@ -476,12 +476,11 @@ export type SnapTradeConnection = {
   brokerage: string;
   disabled: boolean; // needs a reconnect through the portal
   n_accounts: number;
-  allowed: boolean; // clears the institution allowlist the sync applies
+  excluded: boolean; // this portfolio's sync skips it (linked = synced by default)
 };
 
 export type SnapTradeConnections = {
   connections: SnapTradeConnection[];
-  allowlist: string[]; // effective allowlist ([] = all linked accounts import)
 };
 
 export const getSnapTradeConnections = (tenantId: string, id: string) =>
@@ -537,29 +536,24 @@ export async function removeSnapTradeConnection(
   if (!res.ok) throw await readDetailError(res, "SnapTrade remove");
 }
 
-export type SnapTradeIncludeResult = {
-  added: string[]; // institution strings appended ([] = nothing was missing)
-  allowlist: string[]; // allowlist now in effect ([] = all import)
-};
-
-/** Add a filtered-out connection's institutions to the portfolio's sync allowlist —
- * server-side, from the accounts' actual institution strings, so a typed-string
- * mismatch can't happen. Idempotent. */
-export async function includeSnapTradeConnection(
+/** Toggle a connection's sync opt-out (exclude=true skips it on future syncs;
+ * already-imported data stays). Keyed by stable connection id — no name matching. */
+export async function setSnapTradeConnectionExcluded(
   tenantId: string,
   id: string,
   authorizationId: string,
-): Promise<SnapTradeIncludeResult> {
+  excluded: boolean,
+): Promise<void> {
+  const verb = excluded ? "exclude" : "include";
   const res = await fetch(
-    `${API_URL}/portfolios/${id}/snaptrade/connections/${encodeURIComponent(authorizationId)}/include`,
+    `${API_URL}/portfolios/${id}/snaptrade/connections/${encodeURIComponent(authorizationId)}/${verb}`,
     {
       method: "POST",
       headers: { "X-Tenant-Id": tenantId },
       cache: "no-store",
     },
   );
-  if (!res.ok) throw await readDetailError(res, "SnapTrade include");
-  return res.json() as Promise<SnapTradeIncludeResult>;
+  if (!res.ok) throw await readDetailError(res, `SnapTrade ${verb}`);
 }
 
 /** Refresh the EOD price cache for a portfolio's held tickers (market value follows). */
@@ -610,9 +604,6 @@ export type Preferences = {
   risk_tolerance: string | null;
   objective: string | null;
   notes: string | null;
-  // Comma-separated SnapTrade sync institution allowlist ("all" = every linked
-  // account). Null = deployment default.
-  snaptrade_institutions: string | null;
 };
 
 export const getPreferences = (tenantId: string, id: string) =>

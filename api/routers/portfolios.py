@@ -83,9 +83,6 @@ class PreferencesIn(BaseModel):
     risk_tolerance: str | None = None
     objective: str | None = None
     notes: str | None = None
-    # Comma-separated institution allowlist for SnapTrade sync ("all" = import every
-    # linked account). Null/blank = deployment default (SNAPTRADE_INSTITUTIONS env).
-    snaptrade_institutions: str | None = None
 
 
 class PreferencesOut(BaseModel):
@@ -94,7 +91,6 @@ class PreferencesOut(BaseModel):
     risk_tolerance: str | None = None
     objective: str | None = None
     notes: str | None = None
-    snaptrade_institutions: str | None = None
 
 
 class HoldingOut(BaseModel):
@@ -493,7 +489,6 @@ def put_preferences(
     pref.risk_tolerance = (body.risk_tolerance or "").strip() or None
     pref.objective = (body.objective or "").strip() or None
     pref.notes = (body.notes or "").strip() or None
-    pref.snaptrade_institutions = (body.snaptrade_institutions or "").strip() or None
     session.commit()
     session.refresh(pref)
     return pref
@@ -712,25 +707,35 @@ def _snaptrade_reader_or_error() -> SnapTradeReader:
         raise HTTPException(status_code=503, detail=f"SnapTrade not configured — missing {e}.") from e
 
 
-def _effective_snaptrade_institutions(session: Session, portfolio: models.Portfolio) -> list[str]:
-    """The institution allowlist a SnapTrade sync applies for this portfolio.
-
-    The portfolio's saved Settings value wins when present — ``"all"`` means no
-    filter (import every linked account); otherwise the deployment default
-    (``SNAPTRADE_INSTITUTIONS`` env). Matching is case-insensitive substring either
-    way (see ``_filter_snapshot_institutions``)."""
+def _get_or_create_preferences(session: Session, portfolio: models.Portfolio) -> models.InvestorPreferences:
     pref = session.scalars(
         select(models.InvestorPreferences).where(
             models.InvestorPreferences.tenant_id == portfolio.tenant_id,
             models.InvestorPreferences.portfolio_id == portfolio.id,
         )
     ).first()
-    raw = pref.snaptrade_institutions if pref is not None else None
-    if raw is None or not raw.strip():
-        return settings.snaptrade_institution_list
-    if raw.strip().lower() == "all":
-        return []
-    return [s.strip() for s in raw.split(",") if s.strip()]
+    if pref is None:
+        pref = models.InvestorPreferences(tenant_id=portfolio.tenant_id, portfolio_id=portfolio.id)
+        session.add(pref)
+    return pref
+
+
+def _snaptrade_excluded_ids(session: Session, portfolio: models.Portfolio) -> set[str]:
+    """Authorization ids of connections this portfolio's SnapTrade sync skips.
+
+    Linked = synced by default; exclusion is the rare opt-out for a broker sourced
+    elsewhere (e.g. IBKR via Flex — syncing it from SnapTrade too would double-count).
+    Keyed by the connection's stable authorization id — never by institution-name
+    matching, which proved fragile (SnapTrade reports "E-Trade" on accounts but
+    "E*Trade" on the connection)."""
+    pref = session.scalars(
+        select(models.InvestorPreferences).where(
+            models.InvestorPreferences.tenant_id == portfolio.tenant_id,
+            models.InvestorPreferences.portfolio_id == portfolio.id,
+        )
+    ).first()
+    raw = pref.snaptrade_excluded_connections if pref is not None else None
+    return {s.strip() for s in (raw or "").split(",") if s.strip()}
 
 
 @router.post("/{portfolio_id}/import/snaptrade", response_model=ImportOut)
@@ -740,9 +745,8 @@ def import_snaptrade(
 ) -> ImportOut:
     """Sync the operator's linked SnapTrade brokerages into this portfolio.
 
-    Pulls every account linked to the operator SnapTrade user, filtered to the
-    portfolio's institution allowlist (Settings; deployment env as default) so a
-    broker sourced elsewhere (e.g. IBKR via Flex) doesn't double-count.
+    Imports every account of every linked connection, minus connections the
+    portfolio has explicitly excluded (see ``_snaptrade_excluded_ids``).
 
     404 when personal mode is off / 503 unconfigured (see
     ``_snaptrade_reader_or_error``); 502 on a SnapTrade/network failure — always
@@ -752,7 +756,20 @@ def import_snaptrade(
     snapshot = SnapTradeConnector(reader).sync()
     if snapshot.error:
         raise HTTPException(status_code=502, detail=f"SnapTrade sync failed: {snapshot.error}")
-    _filter_snapshot_institutions(snapshot, _effective_snaptrade_institutions(session, portfolio))
+    excluded_ids = _snaptrade_excluded_ids(session, portfolio)
+    if excluded_ids:
+        # The snapshot's accounts don't carry the authorization id, so map account
+        # numbers to connections via the reader and drop the excluded ones.
+        try:
+            accounts = reader.get_accounts()
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"SnapTrade accounts fetch failed: {e}") from e
+        excluded_numbers = {
+            a.get("number") for a in accounts if a.get("brokerage_authorization") in excluded_ids
+        }
+        snapshot.accounts = [a for a in snapshot.accounts if a.number not in excluded_numbers]
+        snapshot.holdings = [h for h in snapshot.holdings if h.account_number not in excluded_numbers]
+        snapshot.activities = [a for a in snapshot.activities if a.account_number not in excluded_numbers]
     persisted = persistence.persist_snapshot(
         session, tenant_id=portfolio.tenant_id, portfolio_id=portfolio.id, snapshot=snapshot
     )
@@ -764,14 +781,12 @@ class SnapTradeConnectionOut(BaseModel):
     brokerage: str
     disabled: bool = False
     n_accounts: int = 0
-    # Would this connection's accounts survive the sync's institution allowlist?
-    allowed: bool = True
+    # True when this portfolio's sync skips the connection (opt-out, default synced).
+    excluded: bool = False
 
 
 class SnapTradeConnectionsOut(BaseModel):
     connections: list[SnapTradeConnectionOut]
-    # Effective allowlist the sync applies for this portfolio ([] = all linked accounts).
-    allowlist: list[str]
 
 
 class SnapTradeConnectIn(BaseModel):
@@ -795,7 +810,7 @@ def list_snaptrade_connections(
     session: Session = Depends(get_session),
 ) -> SnapTradeConnectionsOut:
     """The operator's linked SnapTrade brokerage connections, with account counts and
-    whether each clears the institution allowlist this portfolio applies on sync.
+    whether this portfolio's sync excludes each (linked = synced by default).
 
     Same gating/error contract as the sync (404 flag-off / 503 unconfigured / 502
     upstream failure with a reason)."""
@@ -805,25 +820,18 @@ def list_snaptrade_connections(
         accounts = reader.get_accounts()
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"SnapTrade connections fetch failed: {e}") from e
-    allowlist = _effective_snaptrade_institutions(session, portfolio)
-    allow = [s.lower() for s in allowlist]
-    out = []
-    for c in connections:
-        accts = [a for a in accounts if a.get("brokerage_authorization") == c["id"]]
-        # Allowlist matching mirrors the sync filter (account institution names);
-        # a connection with no synced accounts yet falls back to its brokerage name.
-        names = [a.get("institution") or "" for a in accts] or [c["brokerage"]]
-        allowed = not allow or any(any(s in n.lower() for s in allow) for n in names)
-        out.append(
-            SnapTradeConnectionOut(
-                id=c["id"],
-                brokerage=c["brokerage"],
-                disabled=c["disabled"],
-                n_accounts=len(accts),
-                allowed=allowed,
-            )
+    excluded_ids = _snaptrade_excluded_ids(session, portfolio)
+    out = [
+        SnapTradeConnectionOut(
+            id=c["id"],
+            brokerage=c["brokerage"],
+            disabled=c["disabled"],
+            n_accounts=sum(1 for a in accounts if a.get("brokerage_authorization") == c["id"]),
+            excluded=c["id"] in excluded_ids,
         )
-    return SnapTradeConnectionsOut(connections=out, allowlist=allowlist)
+        for c in connections
+    ]
+    return SnapTradeConnectionsOut(connections=out)
 
 
 @router.post("/{portfolio_id}/snaptrade/connect", response_model=SnapTradeConnectUrlOut)
@@ -857,6 +865,7 @@ class SnapTradeRemoveOut(BaseModel):
 def remove_snaptrade_connection(
     authorization_id: str,
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
 ) -> SnapTradeRemoveOut:
     """Permanently delete a brokerage connection at SnapTrade (frees a plan slot).
 
@@ -870,90 +879,64 @@ def remove_snaptrade_connection(
         reader.remove_connection(authorization_id)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"SnapTrade connection removal failed: {e}") from e
+    # A removed connection can't linger in the exclusion set (a re-link gets a new id).
+    if authorization_id in _snaptrade_excluded_ids(session, portfolio):
+        _set_connection_excluded(session, portfolio, authorization_id, excluded=False)
     return SnapTradeRemoveOut(removed=authorization_id)
 
 
-class SnapTradeIncludeOut(BaseModel):
-    # Institution strings appended to the allowlist ([] = nothing was missing).
-    added: list[str]
-    # The allowlist now in effect for this portfolio's sync ([] = all import).
-    allowlist: list[str]
+class SnapTradeExclusionOut(BaseModel):
+    id: str
+    excluded: bool
+
+
+def _set_connection_excluded(
+    session: Session, portfolio: models.Portfolio, authorization_id: str, excluded: bool
+) -> SnapTradeExclusionOut:
+    """Persist a connection's sync opt-out on the portfolio's preferences row.
+
+    Keyed by the stable authorization id — exact, no name matching. Idempotent."""
+    if not settings.snaptrade_personal:
+        raise HTTPException(status_code=404, detail="SnapTrade sync is not enabled on this deployment.")
+    ids = _snaptrade_excluded_ids(session, portfolio)
+    if excluded:
+        ids.add(authorization_id)
+    else:
+        ids.discard(authorization_id)
+    pref = _get_or_create_preferences(session, portfolio)
+    pref.snaptrade_excluded_connections = ", ".join(sorted(ids)) or None
+    session.commit()
+    return SnapTradeExclusionOut(id=authorization_id, excluded=excluded)
+
+
+@router.post(
+    "/{portfolio_id}/snaptrade/connections/{authorization_id}/exclude",
+    response_model=SnapTradeExclusionOut,
+)
+def exclude_snaptrade_connection(
+    authorization_id: str,
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> SnapTradeExclusionOut:
+    """Opt this connection out of the portfolio's SnapTrade sync.
+
+    For a broker sourced elsewhere (e.g. IBKR via Flex) — syncing it from SnapTrade
+    too would double-count. Future syncs skip its accounts; already-imported data
+    stays. No SnapTrade call is made; this is pure local preference."""
+    return _set_connection_excluded(session, portfolio, authorization_id, excluded=True)
 
 
 @router.post(
     "/{portfolio_id}/snaptrade/connections/{authorization_id}/include",
-    response_model=SnapTradeIncludeOut,
+    response_model=SnapTradeExclusionOut,
 )
 def include_snaptrade_connection(
     authorization_id: str,
     portfolio: models.Portfolio = Depends(_owned_portfolio),
     session: Session = Depends(get_session),
-) -> SnapTradeIncludeOut:
-    """Add a filtered-out connection's institutions to this portfolio's sync allowlist.
-
-    Uses the connection's accounts' ACTUAL ``institution_name`` strings, so the typed-
-    string mismatch trap can't happen (SnapTrade's account institution often differs
-    from the brokerage display name — e.g. accounts say "E-Trade" while the connection
-    says "E*Trade"). Persists to the portfolio's Settings preference; when no preference
-    exists yet, the deployment-default env allowlist is materialized first so existing
-    inclusions (e.g. Fidelity) are preserved. Idempotent — already-allowed institutions
-    are not re-added. Same gating/error contract as the sync."""
-    reader = _snaptrade_reader_or_error()
-    try:
-        accounts = reader.get_accounts()
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"SnapTrade accounts fetch failed: {e}") from e
-    names = sorted(
-        {
-            (a.get("institution") or "").strip()
-            for a in accounts
-            if a.get("brokerage_authorization") == authorization_id
-        }
-        - {""}
-    )
-    if not names:
-        raise HTTPException(
-            status_code=404,
-            detail="No accounts found for this connection — SnapTrade may still be syncing it; retry shortly.",
-        )
-    current = _effective_snaptrade_institutions(session, portfolio)
-    if not current:
-        # Empty allowlist = everything already imports; nothing to add.
-        return SnapTradeIncludeOut(added=[], allowlist=[])
-    allow = [s.lower() for s in current]
-    added = [n for n in names if not any(s in n.lower() for s in allow)]
-    if not added:
-        return SnapTradeIncludeOut(added=[], allowlist=current)
-    pref = session.scalars(
-        select(models.InvestorPreferences).where(
-            models.InvestorPreferences.tenant_id == portfolio.tenant_id,
-            models.InvestorPreferences.portfolio_id == portfolio.id,
-        )
-    ).first()
-    if pref is None:
-        pref = models.InvestorPreferences(tenant_id=portfolio.tenant_id, portfolio_id=portfolio.id)
-        session.add(pref)
-    new_list = current + added
-    pref.snaptrade_institutions = ", ".join(new_list)
-    session.commit()
-    return SnapTradeIncludeOut(added=added, allowlist=new_list)
-
-
-def _filter_snapshot_institutions(snapshot, institutions: list[str]) -> None:
-    """Drop accounts (and their holdings/activities) not at an allowlisted institution.
-
-    No-op when the allowlist is empty. Matches case-insensitively by substring so
-    "Fidelity" keeps "Fidelity"/"Fidelity Investments". Lets the personal SnapTrade sync
-    import only e.g. Fidelity while IBKR is sourced from Flex — no double-count."""
-    if not institutions:
-        return
-    allow = [s.lower() for s in institutions]
-    keep = {
-        a.number for a in snapshot.accounts if any(s in (a.institution or "").lower() for s in allow)
-    }
-    snapshot.accounts = [a for a in snapshot.accounts if a.number in keep]
-    snapshot.holdings = [h for h in snapshot.holdings if h.account_number in keep]
-    snapshot.activities = [a for a in snapshot.activities if a.account_number in keep]
+) -> SnapTradeExclusionOut:
+    """Undo a connection's sync opt-out (linked connections sync by default)."""
+    return _set_connection_excluded(session, portfolio, authorization_id, excluded=False)
 
 
 @router.post("/{portfolio_id}/prices/refresh", response_model=PriceRefreshOut)

@@ -10,13 +10,13 @@ import {
   createSnapTradeConnectUrl,
   getSnapTradeConnections,
   importFile,
-  includeSnapTradeConnection,
   MetronApiError,
   type Preferences,
   putPreferences,
   refreshPrices,
   removeSnapTradeConnection,
   renamePortfolio,
+  setSnapTradeConnectionExcluded,
   type SnapTradeConnections,
   syncFlex,
   syncSnapTrade,
@@ -147,17 +147,17 @@ export async function removeSnapTradeConnectionAction(
   }
 }
 
-export async function includeSnapTradeConnectionAction(
+export async function setSnapTradeExclusionAction(
   portfolioId: string,
   authorizationId: string,
+  excluded: boolean,
 ): Promise<{ ok: boolean; message: string }> {
   try {
     const tenantId = await requireTenantId();
-    const r = await includeSnapTradeConnection(tenantId, portfolioId, authorizationId);
-    revalidatePath(`/portfolios/${portfolioId}/settings`);
-    const message = r.added.length
-      ? `Added ${r.added.join(", ")} to the sync institutions — now Sync.`
-      : "Already included in the sync institutions.";
+    await setSnapTradeConnectionExcluded(tenantId, portfolioId, authorizationId, excluded);
+    const message = excluded
+      ? "Excluded — future syncs skip this connection (imported data stays)."
+      : "Included — the next Sync imports this connection.";
     return { ok: true, message };
   } catch (e) {
     return { ok: false, message: errorMessage(e) };
