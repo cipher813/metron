@@ -28,6 +28,12 @@ export function percent(ratio: number): string {
   return `${sign}${Math.abs(pct).toFixed(1)}%`;
 }
 
+/** FX rate display — significant digits, not fixed decimals, so small rates
+ * stay meaningful (HKD→USD ≈ 0.1274) without padding rates near 1. */
+export function fxRate(rate: number): string {
+  return new Intl.NumberFormat("en-US", { maximumSignificantDigits: 4 }).format(rate);
+}
+
 /** Format a date-only ISO string (YYYY-MM-DD) without Date parsing, to avoid a
  * timezone day-shift (`new Date("2024-03-15")` is UTC midnight). */
 export function isoDate(value: string): string {

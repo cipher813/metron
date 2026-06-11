@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { acctParams, getAccounts, getHoldings, getIncome, getPlugins, getPortfolio, getSummary, MetronApiError, type Portfolio, type PluginNav } from "@/lib/api";
-import { money, percent, quantity, signClass, signedMoney } from "@/lib/format";
+import { money, signClass, signedMoney } from "@/lib/format";
 import { Empty, Section, StatCard, Table } from "@/components/ui";
 import { AccountPanel } from "@/components/account-panel";
+import { HoldingsTable } from "@/components/holdings-table";
 import { ImportPanel } from "@/components/import-panel";
 import { RefreshPrices } from "@/components/refresh-prices";
 import { RenamePortfolio } from "@/components/rename-portfolio";
@@ -151,65 +152,14 @@ export default async function PortfolioPage({
         <ImportPanel portfolioId={id} />
       </Section>
 
-      <Section title="Holdings" note={priced ? "market value from last EOD close" : "cost basis — refresh for market value"}>
+      <Section title="Holdings" note={priced ? `all values in ${ccy} · market value from last EOD close` : "cost basis — refresh for market value"}>
         <div className="mb-3">
           <RefreshPrices portfolioId={id} />
         </div>
         {holdings.length === 0 ? (
           <Empty>No open positions.</Empty>
         ) : (
-          <Table
-            head={
-              priced
-                ? ["Ticker", "Ccy", "Quantity", "Avg cost", "Cost basis", "Last", "Market value", "Unrealized"]
-                : ["Ticker", "Ccy", "Quantity", "Avg cost", "Cost basis"]
-            }
-          >
-            {holdings.map((h) => {
-              // Native fields (avg cost / cost basis / last) render in the holding's own
-              // currency; market value + unrealized are converted to the base currency.
-              const foreign = h.currency !== ccy;
-              return (
-                <tr key={h.ticker} className="border-b border-line last:border-0">
-                  <td className="px-4 py-2 font-medium">{h.ticker}</td>
-                  <td className="px-4 py-2 text-muted">{h.currency}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{quantity(h.quantity)}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{money(h.avg_cost, h.currency)}</td>
-                  <td className="px-4 py-2 text-right tabular-nums">{money(h.cost_basis, h.currency)}</td>
-                  {priced ? (
-                    <>
-                      <td className="px-4 py-2 text-right tabular-nums text-muted">
-                        {h.last_price != null ? money(h.last_price, h.currency) : "—"}
-                      </td>
-                      <td className="px-4 py-2 text-right tabular-nums">
-                        {h.market_value != null ? (
-                          money(h.market_value, ccy)
-                        ) : foreign && h.market_value_local != null ? (
-                          <span className="text-muted" title={`No ${ccy} FX rate cached`}>
-                            {money(h.market_value_local, h.currency)}*
-                          </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className={`px-4 py-2 text-right tabular-nums ${signClass(h.unrealized_gain ?? 0)}`}>
-                        {h.unrealized_gain != null ? (
-                          <>
-                            {signedMoney(h.unrealized_gain, ccy)}
-                            {h.unrealized_pct != null ? (
-                              <span className="ml-1 text-xs">({percent(h.unrealized_pct)})</span>
-                            ) : null}
-                          </>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                    </>
-                  ) : null}
-                </tr>
-              );
-            })}
-          </Table>
+          <HoldingsTable holdings={holdings} baseCurrency={ccy} priced={priced} />
         )}
       </Section>
 
