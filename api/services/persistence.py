@@ -45,6 +45,27 @@ class PersistResult:
     transactions_inserted: int = 0
     transactions_skipped: int = 0  # already present (idempotent re-import)
     positions_imported: int = 0    # broker-reported holdings written (snapshot sources)
+    accounts_excluded: int = 0     # snapshot accounts skipped — user-deleted (excluded keys)
+
+
+def account_key(broker: str, external_id: str) -> str:
+    """The stable exclusion key for a broker account — ``broker:external_id``, the
+    same identity the accounts upsert dedupes on (never institution-name matching)."""
+    return f"{broker}:{external_id}"
+
+
+def excluded_account_keys(
+    session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID
+) -> set[str]:
+    """The portfolio's user-deleted broker-account keys (see ``account_key``).
+    Imports skip these so a deleted account stays deleted across re-syncs."""
+    raw = session.scalars(
+        select(models.InvestorPreferences.excluded_account_keys).where(
+            models.InvestorPreferences.tenant_id == tenant_id,
+            models.InvestorPreferences.portfolio_id == portfolio_id,
+        )
+    ).first()
+    return {s.strip() for s in (raw or "").split(",") if s.strip()}
 
 
 def _upsert_securities(
@@ -246,6 +267,15 @@ def persist_snapshot(
     by ``source_key``, positions replaced per account (snapshot semantics).
     """
     result = PersistResult()
+    # User-deleted accounts are dropped from the snapshot BEFORE the upsert — the one
+    # chokepoint every import path (SnapTrade, Flex, CSV/OFX) flows through, so a
+    # deleted account can never be silently resurrected by a later sync. Their
+    # activities/positions then skip naturally (no account row to attach to).
+    excluded = excluded_account_keys(session, tenant_id, portfolio_id)
+    if excluded:
+        kept = [a for a in snapshot.accounts if account_key(snapshot.source, a.number) not in excluded]
+        result.accounts_excluded = len(snapshot.accounts) - len(kept)
+        snapshot.accounts = kept
     securities = _upsert_securities(session, snapshot, result)
     accounts = _upsert_accounts(session, snapshot, tenant_id, portfolio_id, result)
     _insert_activities(session, snapshot, tenant_id, accounts, securities, result)

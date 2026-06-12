@@ -19,6 +19,7 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -591,6 +592,160 @@ def update_account_tags(
         tax_treatment=account.tax_treatment,
         taxable=account_meta.is_taxable(account),
     )
+
+
+class AccountDeleteOut(BaseModel):
+    account_id: uuid.UUID
+    # The broker:external_id exclusion key now blocking re-import (restore in Settings).
+    excluded_key: str
+
+
+@router.delete("/{portfolio_id}/accounts/{account_id}", response_model=AccountDeleteOut)
+def delete_account(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account: models.Account = Depends(_owned_account),
+    session: Session = Depends(get_session),
+) -> AccountDeleteOut:
+    """Delete a connected account and all its data (transactions, positions, NAV
+    snapshots), and record its ``broker:external_id`` on the portfolio's exclusion
+    list so no future import resurrects it — a broker connection often carries
+    accounts the user doesn't track (e.g. emptied siblings), and without the
+    exclusion the very next sync would silently re-create the row. Reversible:
+    restore the key from Settings, then re-sync.
+
+    Also prunes the id from the saved accounts-panel selection so a stale saved
+    filter can't reference a gone account."""
+    account_id = account.id
+    key = persistence.account_key(account.broker, account.external_id)
+    # AccountNavSnapshot has no ORM cascade from Account (and SQLite FK enforcement is
+    # off), so its rows are deleted explicitly; transactions/positions cascade via ORM.
+    session.execute(
+        sa_delete(models.AccountNavSnapshot).where(models.AccountNavSnapshot.account_id == account_id)
+    )
+    pref = _get_or_create_preferences(session, portfolio)
+    keys = {s.strip() for s in (pref.excluded_account_keys or "").split(",") if s.strip()}
+    keys.add(key)
+    pref.excluded_account_keys = ", ".join(sorted(keys))
+    selected = [s.strip() for s in (pref.selected_account_ids or "").split(",") if s.strip()]
+    if str(account_id) in selected:
+        pref.selected_account_ids = ", ".join(s for s in selected if s != str(account_id)) or None
+    session.delete(account)
+    session.commit()
+    return AccountDeleteOut(account_id=account_id, excluded_key=key)
+
+
+class ExcludedAccountOut(BaseModel):
+    key: str
+    broker: str
+    external_id: str
+
+
+class ExcludedAccountsOut(BaseModel):
+    excluded: list[ExcludedAccountOut]
+
+
+@router.get("/{portfolio_id}/accounts/excluded", response_model=ExcludedAccountsOut)
+def list_excluded_accounts(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> ExcludedAccountsOut:
+    """Broker accounts the user deleted — imports skip these keys. Shown in Settings
+    so deletion is reversible (restore → next sync re-imports)."""
+    keys = persistence.excluded_account_keys(session, portfolio.tenant_id, portfolio.id)
+    out = []
+    for key in sorted(keys):
+        broker, _, external_id = key.partition(":")
+        out.append(ExcludedAccountOut(key=key, broker=broker, external_id=external_id))
+    return ExcludedAccountsOut(excluded=out)
+
+
+class RestoreAccountIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+
+
+@router.post("/{portfolio_id}/accounts/excluded/restore", response_model=ExcludedAccountsOut)
+def restore_excluded_account(
+    body: RestoreAccountIn,
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> ExcludedAccountsOut:
+    """Drop one key from the exclusion list — the next sync of its source re-imports
+    the account. 404 on an unknown key (nothing to restore)."""
+    pref = _get_or_create_preferences(session, portfolio)
+    keys = {s.strip() for s in (pref.excluded_account_keys or "").split(",") if s.strip()}
+    if body.key not in keys:
+        raise HTTPException(status_code=404, detail="No such excluded account")
+    keys.discard(body.key)
+    pref.excluded_account_keys = ", ".join(sorted(keys)) or None
+    session.commit()
+    return list_excluded_accounts(portfolio, session)
+
+
+class AccountSelectionOut(BaseModel):
+    account_ids: list[uuid.UUID]
+
+
+class AccountSelectionIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    account_ids: list[uuid.UUID]
+
+
+@router.get("/{portfolio_id}/accounts/selection", response_model=AccountSelectionOut)
+def get_account_selection(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> AccountSelectionOut:
+    """The saved accounts-panel selection (empty = whole portfolio). Ids that no
+    longer resolve to an account (deleted since saving) are filtered out, so the
+    saved filter degrades to the surviving accounts rather than 404ing pages."""
+    pref = session.scalars(
+        select(models.InvestorPreferences).where(
+            models.InvestorPreferences.tenant_id == portfolio.tenant_id,
+            models.InvestorPreferences.portfolio_id == portfolio.id,
+        )
+    ).first()
+    raw = [s.strip() for s in ((pref.selected_account_ids if pref else None) or "").split(",") if s.strip()]
+    ids = [uuid.UUID(s) for s in raw]
+    if not ids:
+        return AccountSelectionOut(account_ids=[])
+    alive = set(
+        session.scalars(
+            select(models.Account.id).where(
+                models.Account.portfolio_id == portfolio.id, models.Account.id.in_(ids)
+            )
+        ).all()
+    )
+    return AccountSelectionOut(account_ids=[i for i in ids if i in alive])
+
+
+@router.put("/{portfolio_id}/accounts/selection", response_model=AccountSelectionOut)
+def put_account_selection(
+    body: AccountSelectionIn,
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> AccountSelectionOut:
+    """Save the accounts-panel selection (empty list = whole portfolio, clears the
+    saved filter). Every id must belong to this portfolio — unknown ids 404 as a set
+    (mirrors ``_selected_account_ids``, never leaks which ids exist)."""
+    requested = set(body.account_ids)
+    if requested:
+        found = set(
+            session.scalars(
+                select(models.Account.id).where(
+                    models.Account.portfolio_id == portfolio.id,
+                    models.Account.id.in_(requested),
+                )
+            ).all()
+        )
+        if found != requested:
+            raise HTTPException(status_code=404, detail="Account not found")
+    pref = _get_or_create_preferences(session, portfolio)
+    pref.selected_account_ids = ", ".join(sorted(str(i) for i in body.account_ids)) or None
+    session.commit()
+    return AccountSelectionOut(account_ids=body.account_ids)
 
 
 def _summarize(snapshot, persisted: persistence.PersistResult, *, parsed: int, skipped: int, errors) -> ImportOut:

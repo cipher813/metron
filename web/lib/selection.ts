@@ -1,0 +1,29 @@
+// Server-side resolution of the accounts-panel selection for pages that scope by
+// the repeatable `?account_id=` query.
+
+import { redirect } from "next/navigation";
+import { acctParams, getAccountSelection } from "@/lib/api";
+
+/** Resolve a page's account selection: an explicit `?account_id=` in the URL always
+ * wins; with none, the saved panel selection (InvestorPreferences) is applied by
+ * redirecting into the equivalent URL — so the panel checkboxes, cross-page nav
+ * links, and sub-page scoping all keep running off the single URL mechanism.
+ *
+ * Best-effort on the saved-selection fetch (a prefs failure must never break the
+ * page). NOTE: calls `redirect()` — invoke OUTSIDE any try/catch in the page. */
+export async function resolveAccountIds(
+  tenantId: string,
+  portfolioId: string,
+  basePath: string,
+  raw: string | string[] | undefined,
+): Promise<string[]> {
+  if (raw != null) return Array.isArray(raw) ? raw : [raw];
+  let saved: string[] = [];
+  try {
+    saved = await getAccountSelection(tenantId, portfolioId);
+  } catch {
+    saved = [];
+  }
+  if (saved.length > 0) redirect(`${basePath}${acctParams(saved)}`);
+  return [];
+}

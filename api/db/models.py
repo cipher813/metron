@@ -267,4 +267,13 @@ class InvestorPreferences(Base):
     # institution-name matching. (The legacy snaptrade_institutions column may
     # still exist physically in older SQLite files; it is unmapped and unread.)
     snaptrade_excluded_connections: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # Comma-separated ``broker:external_id`` keys of broker accounts the user DELETED.
+    # Enforced at the persist_snapshot chokepoint so no future import (SnapTrade, Flex,
+    # CSV/OFX re-upload) silently resurrects a deleted account. The account-level
+    # sibling of snaptrade_excluded_connections; restore via the Settings page.
+    excluded_account_keys: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    # Comma-separated account UUIDs — the saved accounts-panel selection. Pages landing
+    # without an explicit ``?account_id=`` apply this, so the selection survives
+    # reloads/devices. NULL/empty = whole portfolio.
+    selected_account_ids: Mapped[str | None] = mapped_column(String(4000), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(server_default=func.now(), onupdate=func.now())

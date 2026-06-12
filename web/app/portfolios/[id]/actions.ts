@@ -8,14 +8,17 @@ import { revalidatePath } from "next/cache";
 import {
   type AccountTagPatch,
   createSnapTradeConnectUrl,
+  deleteAccount,
   getSnapTradeConnections,
   importFile,
   MetronApiError,
   type Preferences,
+  putAccountSelection,
   putPreferences,
   refreshPrices,
   removeSnapTradeConnection,
   renamePortfolio,
+  restoreExcludedAccount,
   setSnapTradeConnectionExcluded,
   type SnapTradeConnections,
   syncFlex,
@@ -189,6 +192,41 @@ export async function updateAccountTagsAction(
     return { ok: true, message: "Account updated." };
   } catch (e) {
     return { ok: false, message: e instanceof MetronApiError ? e.message : "Update failed — backend reachable?" };
+  }
+}
+
+export async function deleteAccountAction(portfolioId: string, accountId: string): Promise<ActionResult> {
+  try {
+    const tenantId = await requireTenantId();
+    await deleteAccount(tenantId, portfolioId, accountId);
+    revalidatePath(`/portfolios/${portfolioId}`, "layout");
+    return { ok: true, message: "Account deleted. Future syncs will skip it (restore from Settings)." };
+  } catch (e) {
+    return { ok: false, message: e instanceof MetronApiError ? e.message : "Delete failed — backend reachable?" };
+  }
+}
+
+export async function restoreExcludedAccountAction(portfolioId: string, key: string): Promise<ActionResult> {
+  try {
+    const tenantId = await requireTenantId();
+    await restoreExcludedAccount(tenantId, portfolioId, key);
+    revalidatePath(`/portfolios/${portfolioId}`, "layout");
+    return { ok: true, message: "Account restored — run a sync to re-import it." };
+  } catch (e) {
+    return { ok: false, message: e instanceof MetronApiError ? e.message : "Restore failed — backend reachable?" };
+  }
+}
+
+/** Persist the accounts-panel selection. Fire-and-forget from the panel — a save
+ * failure must never block the URL-driven filtering, so errors come back as a
+ * result (the panel ignores them) rather than throwing. */
+export async function saveAccountSelectionAction(portfolioId: string, accountIds: string[]): Promise<ActionResult> {
+  try {
+    const tenantId = await requireTenantId();
+    await putAccountSelection(tenantId, portfolioId, accountIds);
+    return { ok: true, message: "Selection saved." };
+  } catch (e) {
+    return { ok: false, message: e instanceof MetronApiError ? e.message : "Selection save failed." };
   }
 }
 
