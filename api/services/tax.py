@@ -95,7 +95,7 @@ def tax_lots(
         taxable = account_meta.taxable_account_ids(session, tenant_id, portfolio_id)
         account_ids = candidate_ids & taxable
         n_excluded = len(candidate_ids) - len(account_ids)
-    ledger = analytics.load_ledger(session, tenant_id, portfolio_id, account_ids=account_ids)
+    ledger, _incomplete = analytics.load_ledger(session, tenant_id, portfolio_id, account_ids=account_ids)
     prices = price_service.latest_close_by_symbol(session, list(ledger.open_lots))
     ccy_by_ticker = analytics._currency_by_symbol(session, list(ledger.open_lots))
     fx_rates = fx.rates_to_base(session, list(ccy_by_ticker.values()), base=base)

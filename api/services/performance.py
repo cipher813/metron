@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from api.db import models
 from api.services import analytics
 from api.services import prices as price_service
-from portfolio_analytics.domain.ledger import TxnType, build_ledger
+from portfolio_analytics.domain.ledger import TxnType
 from portfolio_analytics.prices import ClosePoint, HistorySource, fetch_latest_closes
 
 
@@ -360,7 +360,8 @@ def reconstruct_snapshots(
 
     A position whose ticker has no cached history on a date is excluded from that date's
     NAV (never fabricated); a date with nothing priced is skipped entirely."""
-    txns = analytics.engine_transactions(session, tenant_id, portfolio_id)
+    txns_by_account = analytics.engine_transactions_by_account(session, tenant_id, portfolio_id)
+    txns = [t for _aid, t in txns_by_account]
     if not txns:
         return 0
     first = min(t.when for t in txns)
@@ -372,10 +373,17 @@ def reconstruct_snapshots(
     history = price_service.close_history_by_symbol(session, [*symbols, "SPY"])
     spy_series = history.get("SPY")
 
+    # WARN once, over the full set, for any per-(account, ticker) group whose history
+    # can't replay; the per-date loop below then skips quietly (log=False) instead of
+    # repeating the same warning for every valuation date.
+    analytics.build_portfolio_ledger(txns_by_account)
+
     flow_dates = [t.when for t in txns if t.type in (TxnType.DEPOSIT, TxnType.WITHDRAWAL)]
     written = 0
     for when in _valuation_dates(first, today, flow_dates):
-        ledger = build_ledger([t for t in txns if t.when <= when])
+        ledger, _incomplete = analytics.build_portfolio_ledger(
+            [(aid, t) for aid, t in txns_by_account if t.when <= when], log=False
+        )
         nav = 0.0
         cost_basis = 0.0
         valued_any = False
