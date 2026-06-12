@@ -600,6 +600,69 @@ export async function updateAccountTags(
   return res.json() as Promise<Account>;
 }
 
+/** Delete a connected account + all its data; its broker:external_id key joins the
+ * exclusion list so future syncs skip it (restore from Settings). */
+export async function deleteAccount(
+  tenantId: string,
+  id: string,
+  accountId: string,
+): Promise<{ account_id: string; excluded_key: string }> {
+  const res = await fetch(`${API_URL}/portfolios/${id}/accounts/${accountId}`, {
+    method: "DELETE",
+    headers: { "X-Tenant-Id": tenantId },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new MetronApiError(res.status, `delete account → ${res.status}`);
+  }
+  return res.json();
+}
+
+export type ExcludedAccount = { key: string; broker: string; external_id: string };
+
+/** Deleted broker accounts (imports skip these keys) — restorable from Settings. */
+export const getExcludedAccounts = (tenantId: string, id: string) =>
+  get<{ excluded: ExcludedAccount[] }>(tenantId, `/portfolios/${id}/accounts/excluded`);
+
+/** Drop a key from the exclusion list — the next sync re-imports that account. */
+export async function restoreExcludedAccount(
+  tenantId: string,
+  id: string,
+  key: string,
+): Promise<{ excluded: ExcludedAccount[] }> {
+  const res = await fetch(`${API_URL}/portfolios/${id}/accounts/excluded/restore`, {
+    method: "POST",
+    headers: { "X-Tenant-Id": tenantId, "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new MetronApiError(res.status, `restore account → ${res.status}`);
+  }
+  return res.json();
+}
+
+/** The saved accounts-panel selection (empty = whole portfolio). */
+export const getAccountSelection = async (tenantId: string, id: string): Promise<string[]> =>
+  (await get<{ account_ids: string[] }>(tenantId, `/portfolios/${id}/accounts/selection`)).account_ids;
+
+/** Save the accounts-panel selection (empty list clears it = whole portfolio). */
+export async function putAccountSelection(
+  tenantId: string,
+  id: string,
+  accountIds: string[],
+): Promise<void> {
+  const res = await fetch(`${API_URL}/portfolios/${id}/accounts/selection`, {
+    method: "PUT",
+    headers: { "X-Tenant-Id": tenantId, "Content-Type": "application/json" },
+    body: JSON.stringify({ account_ids: accountIds }),
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new MetronApiError(res.status, `save selection → ${res.status}`);
+  }
+}
+
 export type Preferences = {
   risk_tolerance: string | null;
   objective: string | null;

@@ -3,6 +3,7 @@ import { acctParams, getRealized, getSummary, getTransactions, MetronApiError } 
 import { isoDate, money, quantity, signClass, signedMoney } from "@/lib/format";
 import { Empty, Section, Table } from "@/components/ui";
 import { requireTenantId } from "@/lib/session";
+import { resolveAccountIds } from "@/lib/selection";
 
 export const dynamic = "force-dynamic";
 
@@ -16,8 +17,8 @@ export default async function TransactionsPage({
   const { id } = params;
   const tenantId = await requireTenantId();
 
-  const raw = searchParams.account_id;
-  const accountIds = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  // URL selection wins; with none, the saved panel selection is applied (redirect).
+  const accountIds = await resolveAccountIds(tenantId, id, `/portfolios/${id}/transactions`, searchParams.account_id);
   const navQuery = acctParams(accountIds);
 
   let summary, transactions, realized;

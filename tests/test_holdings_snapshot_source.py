@@ -11,7 +11,6 @@ bar, market value came from the broker snapshot (single) while cost was doubled 
 
 from __future__ import annotations
 
-import uuid
 from datetime import date
 
 from api.db import models

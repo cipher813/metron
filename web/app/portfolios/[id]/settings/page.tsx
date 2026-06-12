@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { getAccounts, getPortfolio, getPreferences, MetronApiError, type Preferences } from "@/lib/api";
+import { getAccounts, getExcludedAccounts, getPortfolio, getPreferences, MetronApiError, type ExcludedAccount, type Preferences } from "@/lib/api";
 import { Empty, Section, Table } from "@/components/ui";
-import { AccountTagRow, BaseCurrencyForm, PreferencesForm } from "@/components/settings-forms";
+import { AccountTagRow, BaseCurrencyForm, ExcludedAccountRow, PreferencesForm } from "@/components/settings-forms";
 import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -10,12 +10,13 @@ export default async function SettingsPage({ params }: { params: { id: string } 
   const { id } = params;
   const tenantId = await requireTenantId();
 
-  let portfolio, accounts, preferences: Preferences;
+  let portfolio, accounts, preferences: Preferences, excluded: ExcludedAccount[];
   try {
-    [portfolio, accounts, preferences] = await Promise.all([
+    [portfolio, accounts, preferences, excluded] = await Promise.all([
       getPortfolio(tenantId, id),
       getAccounts(tenantId, id),
       getPreferences(tenantId, id),
+      getExcludedAccounts(tenantId, id).then((r) => r.excluded),
     ]);
   } catch (e) {
     if (e instanceof MetronApiError && e.status === 404) {
@@ -48,6 +49,19 @@ export default async function SettingsPage({ params }: { params: { id: string } 
           </Table>
         )}
       </Section>
+
+      {excluded.length > 0 ? (
+        <Section
+          title="Deleted broker accounts"
+          note="syncs skip these — restore one, then run a sync to re-import it"
+        >
+          <Table head={["Account number", "Source", ""]}>
+            {excluded.map((e) => (
+              <ExcludedAccountRow key={e.key} portfolioId={id} excluded={e} />
+            ))}
+          </Table>
+        </Section>
+      ) : null}
 
       <Section title="Investor preferences">
         <PreferencesForm portfolioId={id} current={preferences} />

@@ -8,6 +8,7 @@ import { ImportPanel } from "@/components/import-panel";
 import { RefreshPrices } from "@/components/refresh-prices";
 import { RenamePortfolio } from "@/components/rename-portfolio";
 import { requireTenantId } from "@/lib/session";
+import { resolveAccountIds } from "@/lib/selection";
 
 export const dynamic = "force-dynamic";
 
@@ -22,8 +23,8 @@ export default async function PortfolioPage({
   const tenantId = await requireTenantId();
 
   // The account-panel selection (repeatable ?account_id=); empty = whole portfolio.
-  const raw = searchParams.account_id;
-  const accountIds = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  // URL selection wins; with none, the saved panel selection is applied (redirect).
+  const accountIds = await resolveAccountIds(tenantId, id, `/portfolios/${id}`, searchParams.account_id);
   const scoped = accountIds.length > 0;
   // Carry the selection onto the cross-page nav links so it persists.
   const navQuery = acctParams(accountIds);

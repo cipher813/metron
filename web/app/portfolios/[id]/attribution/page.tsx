@@ -4,6 +4,7 @@ import { percent, signClass } from "@/lib/format";
 import { Empty, Section, StatCard, Table } from "@/components/ui";
 import { ComputeAttribution } from "@/components/compute-attribution";
 import { requireTenantId } from "@/lib/session";
+import { resolveAccountIds } from "@/lib/selection";
 
 export const dynamic = "force-dynamic";
 
@@ -25,8 +26,8 @@ export default async function AttributionPage({
   const { id } = params;
   const tenantId = await requireTenantId();
 
-  const raw = searchParams.account_id;
-  const accountIds = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  // URL selection wins; with none, the saved panel selection is applied (redirect).
+  const accountIds = await resolveAccountIds(tenantId, id, `/portfolios/${id}/attribution`, searchParams.account_id);
   const navQuery = acctParams(accountIds);
 
   let attr;

@@ -5,12 +5,14 @@
 // and the action revalidates so the change paints across the portfolio views.
 
 import { useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import {
+  restoreExcludedAccountAction,
   savePreferencesAction,
   updateAccountTagsAction,
   updateBaseCurrencyAction,
 } from "@/app/portfolios/[id]/actions";
-import type { Account, Preferences } from "@/lib/api";
+import type { Account, ExcludedAccount, Preferences } from "@/lib/api";
 
 const CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD", "HKD", "JPY", "SGD", "CHF"];
 
@@ -215,5 +217,41 @@ export function PreferencesForm({ portfolioId, current }: { portfolioId: string;
         <Status msg={msg} />
       </div>
     </div>
+  );
+}
+
+/** Deleted broker accounts — imports skip these; restoring re-imports on next sync. */
+export function ExcludedAccountRow({ portfolioId, excluded }: { portfolioId: string; excluded: ExcludedAccount }) {
+  const [pending, start] = useTransition();
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const router = useRouter();
+
+  function restore() {
+    setMsg(null);
+    start(async () => {
+      const r = await restoreExcludedAccountAction(portfolioId, excluded.key);
+      setMsg({ ok: r.ok, text: r.message });
+      if (r.ok) router.refresh();
+    });
+  }
+
+  return (
+    <tr className="border-b border-line last:border-0">
+      <td className="px-3 py-2 font-mono text-xs">{excluded.external_id}</td>
+      <td className="px-3 py-2 text-sm">{excluded.broker}</td>
+      <td className="px-3 py-2">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={pending}
+            onClick={restore}
+            className="rounded border border-line px-2 py-0.5 text-xs hover:bg-slate-50 disabled:opacity-50"
+          >
+            {pending ? "Restoring…" : "Restore"}
+          </button>
+          <Status msg={msg} />
+        </div>
+      </td>
+    </tr>
   );
 }

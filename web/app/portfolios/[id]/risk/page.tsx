@@ -4,6 +4,7 @@ import { percent } from "@/lib/format";
 import { Empty, Section, StatCard, Table } from "@/components/ui";
 import { ComputeRisk } from "@/components/compute-risk";
 import { requireTenantId } from "@/lib/session";
+import { resolveAccountIds } from "@/lib/selection";
 
 export const dynamic = "force-dynamic";
 
@@ -21,8 +22,8 @@ export default async function RiskPage({
   const { id } = params;
   const tenantId = await requireTenantId();
 
-  const raw = searchParams.account_id;
-  const accountIds = raw == null ? [] : Array.isArray(raw) ? raw : [raw];
+  // URL selection wins; with none, the saved panel selection is applied (redirect).
+  const accountIds = await resolveAccountIds(tenantId, id, `/portfolios/${id}/risk`, searchParams.account_id);
   const navQuery = acctParams(accountIds);
 
   let risk;
