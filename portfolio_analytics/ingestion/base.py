@@ -26,6 +26,14 @@ from portfolio_analytics.ingestion.schema import (
 SYNC_FULL_REFRESH = "FULL_REFRESH"
 SYNC_INCREMENTAL = "INCREMENTAL"
 
+# Sources whose broker-reported position snapshot is authoritative for CURRENT
+# holdings — including when it is EMPTY (an account that sold everything has
+# activities but zero position rows, and is still snapshot-sourced). Their
+# activity history exists for realized-gain/dividend reporting and may start
+# mid-position (broker history depth), so it must never be replayed into
+# current holdings. A new snapshot connector MUST add its source here.
+SNAPSHOT_SOURCES = frozenset({"ibkr_flex", "snaptrade"})
+
 
 @dataclass
 class ConnectorSnapshot:

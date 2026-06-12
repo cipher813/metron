@@ -18,6 +18,7 @@ keeps the holding reconciled to the transaction history by construction.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import defaultdict
 from collections.abc import Collection
@@ -30,8 +31,11 @@ from sqlalchemy.orm import Session
 from api.db import models
 from api.services import fx as fx_service
 from api.services import prices as price_service
-from portfolio_analytics.domain.ledger import RealizedGain, Transaction, TxnType, build_ledger
+from portfolio_analytics.domain.ledger import Ledger, RealizedGain, Transaction, TxnType, build_ledger
 from portfolio_analytics.domain.realized import YearlyIncome, summarize_income_by_year
+from portfolio_analytics.ingestion.base import SNAPSHOT_SOURCES
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -146,10 +150,77 @@ def engine_transactions(
     Exposed for historical reconstruction: replaying ``build_ledger`` over the subset
     with ``when <= d`` gives the positions held as of date ``d``. ``account_ids``
     narrows to a set of accounts (e.g. the taxable subset)."""
+    return [txn for _aid, txn in engine_transactions_by_account(session, tenant_id, portfolio_id, account_id, account_ids)]
+
+
+def engine_transactions_by_account(
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    account_id: uuid.UUID | None = None,
+    account_ids: Collection[uuid.UUID] | None = None,
+) -> list[tuple[uuid.UUID, Transaction]]:
+    """Like ``engine_transactions`` but each transaction is paired with its account id —
+    the grouping key ``build_portfolio_ledger`` needs for per-account FIFO lot relief."""
     return [
-        _to_engine_txn(row, ticker)
+        (row.account_id, _to_engine_txn(row, ticker))
         for row, ticker in _portfolio_rows(session, tenant_id, portfolio_id, account_id, account_ids)
     ]
+
+
+@dataclass(frozen=True)
+class IncompleteHistory:
+    """A per-(account, ticker) transaction group whose history could not be replayed —
+    the broker's activity feed starts mid-position (a SELL exceeding reconstructable
+    BUYs), so its lots/realized gains are absent from derived analytics."""
+
+    account_id: uuid.UUID | None
+    ticker: str
+    error: str
+
+
+def build_portfolio_ledger(
+    txns: list[tuple[uuid.UUID | None, Transaction]], *, log: bool = True
+) -> tuple[Ledger, list[IncompleteHistory]]:
+    """Replay transactions into one merged ``Ledger``, FIFO **per (account, ticker)**.
+
+    Lot relief is per account — a SELL in one account never closes a lot bought in
+    another (the IRS reality; mirrors ``reconstruct_tranches``). The strict domain
+    ``build_ledger`` raises on a group whose history starts mid-position — a SELL
+    exceeding the BUYs we can see, e.g. a broker activity feed that doesn't reach back
+    to the opening BUY (live case 2026-06-12: E*TRADE via SnapTrade, ``SELL 27 SQ``
+    with no prior BUY in the feed). Here that group ALONE is skipped — WARN-logged and
+    returned in the flag list (the recording surfaces for this degradation) — instead
+    of one ticker's history gap 500ing every portfolio view that builds a ledger.
+
+    Cash-only transactions (deposits/dividends/interest/fees, no ticker) group per
+    account under ticker ``""`` and can never raise.
+    """
+    groups: dict[tuple[uuid.UUID | None, str], list[Transaction]] = {}
+    for account_id, txn in txns:
+        groups.setdefault((account_id, txn.ticker), []).append(txn)
+
+    merged = Ledger()
+    incomplete: list[IncompleteHistory] = []
+    for (account_id, ticker), group in groups.items():
+        try:
+            ledger = build_ledger(group)
+        except ValueError as e:
+            incomplete.append(IncompleteHistory(account_id=account_id, ticker=ticker, error=str(e)))
+            if log:
+                logger.warning(
+                    "Incomplete history for %s (account %s) — excluded from derived analytics: %s",
+                    ticker, account_id, e,
+                )
+            continue
+        for t, lots in ledger.open_lots.items():
+            merged.open_lots.setdefault(t, []).extend(lots)
+        merged.realized.extend(ledger.realized)
+        merged.cash += ledger.cash
+    for lots in merged.open_lots.values():
+        lots.sort(key=lambda lot: lot.open_date)
+    merged.realized.sort(key=lambda r: r.close_date)
+    return merged, incomplete
 
 
 def load_ledger(
@@ -158,10 +229,14 @@ def load_ledger(
     portfolio_id: uuid.UUID,
     account_id: uuid.UUID | None = None,
     account_ids: Collection[uuid.UUID] | None = None,
-):
+) -> tuple[Ledger, list[IncompleteHistory]]:
     """Build the FIFO ledger for a portfolio (or a single/subset of accounts) from its
-    transactions."""
-    return build_ledger(engine_transactions(session, tenant_id, portfolio_id, account_id, account_ids))
+    transactions. Returns ``(ledger, incomplete)`` — ``incomplete`` flags the
+    per-(account, ticker) groups whose history could not be replayed (already
+    WARN-logged); the ledger carries everything else."""
+    return build_portfolio_ledger(
+        engine_transactions_by_account(session, tenant_id, portfolio_id, account_id, account_ids)
+    )
 
 
 def _position_rows(
@@ -231,17 +306,34 @@ def _scoped_account_ids(
 def _snapshot_sourced_account_ids(
     session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID
 ) -> set[uuid.UUID]:
-    """Accounts that carry a broker position snapshot (Flex/SnapTrade). Their CURRENT
-    holdings come from ``positions``; their transactions — which SnapTrade/Flex ALSO
-    populate, for realized-gain/dividend history — must NOT also feed the current-holdings
-    ledger, or shares + cost basis double-count."""
-    stmt = (
+    """Accounts whose CURRENT holdings come from the broker ``positions`` snapshot
+    (Flex/SnapTrade). Their transactions — which SnapTrade/Flex ALSO populate, for
+    realized-gain/dividend history — must NOT also feed the current-holdings ledger,
+    or shares + cost basis double-count.
+
+    Classified by **broker source**, not by having position rows: an account that sold
+    everything has activities and ZERO position rows, and its empty snapshot is still
+    authoritative (live case 2026-06-12: two emptied E*TRADE accounts leaked their
+    partial activity history into the holdings ledger). The position-rows check is kept
+    as a defensive union for any legacy snapshot data whose broker string predates
+    ``SNAPSHOT_SOURCES``."""
+    by_broker = (
+        select(models.Account.id)
+        .where(
+            models.Account.tenant_id == tenant_id,
+            models.Account.portfolio_id == portfolio_id,
+            models.Account.broker.in_(SNAPSHOT_SOURCES),
+        )
+    )
+    by_positions = (
         select(models.Position.account_id)
         .join(models.Account, models.Position.account_id == models.Account.id)
         .where(models.Position.tenant_id == tenant_id, models.Account.portfolio_id == portfolio_id)
         .distinct()
     )
-    return {row[0] for row in session.execute(stmt)}
+    return {row[0] for row in session.execute(by_broker)} | {
+        row[0] for row in session.execute(by_positions)
+    }
 
 
 def holdings(
@@ -279,7 +371,7 @@ def holdings(
     ledger_ids = _scoped_account_ids(session, portfolio_id, account_id, account_ids) - (
         _snapshot_sourced_account_ids(session, tenant_id, portfolio_id)
     )
-    ledger = load_ledger(session, tenant_id, portfolio_id, account_ids=ledger_ids)
+    ledger, _incomplete = load_ledger(session, tenant_id, portfolio_id, account_ids=ledger_ids)
     for ticker in ledger.open_lots:
         shares, avg_cost = ledger.position(ticker)
         if shares > 0:
@@ -433,7 +525,7 @@ def realized(
     cached as-of rate keeps its base fields None (native still shown). Scopes to one
     account (``account_id``) or a set (``account_ids``)."""
     base = _base_currency(session, portfolio_id)
-    ledger = load_ledger(session, tenant_id, portfolio_id, account_id, account_ids)
+    ledger, _incomplete = load_ledger(session, tenant_id, portfolio_id, account_id, account_ids)
     closed = sorted(ledger.realized, key=lambda r: r.close_date)
     ccy_by_ticker = _currency_by_symbol(session, [r.ticker for r in closed])
     out: list[RealizedLot] = []
@@ -552,7 +644,9 @@ def income(
     taxable subset, so an IRA's dividends don't inflate a taxable-income figure)."""
     base = _base_currency(session, portfolio_id)
     rows = _portfolio_rows(session, tenant_id, portfolio_id, account_ids=account_ids)
-    ledger = build_ledger([_to_engine_txn(row, ticker) for row, ticker in rows])
+    ledger, _incomplete = build_portfolio_ledger(
+        [(row.account_id, _to_engine_txn(row, ticker)) for row, ticker in rows]
+    )
 
     # Realized gains → base at the close-date rate (rebuild each lot with base proceeds /
     # cost so its derived gain is in base; drop a lot we can't convert).
