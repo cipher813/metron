@@ -41,8 +41,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <UserNav />
           </header>
           <main className="py-8">{children}</main>
-          <footer className="border-t border-line py-6 text-[11px] uppercase tracking-[0.14em] text-muted">
-            No AI · no ads or trackers · no advice · read-only. We compute; we never tell you what to trade.
+          <footer className="border-t border-line py-6 text-xs leading-relaxed text-muted">
+            Read-only analytics. No ads, no trackers, no investment advice — we compute the numbers; what you do
+            with them is up to you.
           </footer>
         </div>
       </body>
