@@ -114,10 +114,11 @@ class TestComputeRisk:
 class TestRiskEndpoints:
     def test_compute_then_get(self, client, tenant, monkeypatch):
         # Risk is feed-dependent; the endpoint enforces the entitlement matrix, so this
-        # models a feed-provisioned (entitled) deployment. Without it the API returns
-        # computable=false (reason "feed") regardless of cached history — see
-        # test_endpoint_gated_when_feed_off in test_entitlements_enforcement.py.
-        monkeypatch.setattr(settings, "market_data_sync_enabled", True)
+        # models a feed-entitled deployment (feed_entitled — the entitlement axis,
+        # decoupled from the S3 market_data_sync_enabled infra toggle per metron-ops#43).
+        # Without it the API returns computable=false (reason "feed") regardless of cached
+        # history — see test_entitlements_enforcement.py.
+        monkeypatch.setattr(settings, "feed_entitled", True)
         pid = _seed(client, tenant)
         _refresh(client, tenant, pid, monkeypatch)
         monkeypatch.setattr("api.services.prices.fetch_close_history", _full_hist)

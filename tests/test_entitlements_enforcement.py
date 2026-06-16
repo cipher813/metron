@@ -8,7 +8,9 @@ feed excludes it — returning ``computable=false`` with the entitlement ``reaso
 any price/sector access, so it needs no fixtures.
 
 The effective tier/feed is the deployment's (``default_tier`` +
-``market_data_sync_enabled``); the ``X-Preview-*`` headers override them ONLY when
+``feed_entitled`` — the entitlement feed axis, decoupled from the S3
+``market_data_sync_enabled`` infra toggle per metron-ops#43); the ``X-Preview-*``
+headers override them ONLY when
 ``tier_simulator`` is on (owner-only) — mirroring ``GET /meta/entitlements`` so the
 simulator's feed toggle is honored server-side too.
 """
@@ -49,7 +51,7 @@ def test_beta_tier_deployment_gates_on_tier(client, tenant, monkeypatch, method,
     """A beta-tier deployment doesn't include the wedge → upsell to pro (reason 'tier')."""
     monkeypatch.setattr(settings, "tier_simulator", False)
     monkeypatch.setattr(settings, "default_tier", "beta")
-    monkeypatch.setattr(settings, "market_data_sync_enabled", True)
+    monkeypatch.setattr(settings, "feed_entitled", True)
     pid = _portfolio(client, tenant)
     body = _call(client, method, tenant, pid, path).json()
     assert body["computable"] is False
@@ -63,7 +65,7 @@ def test_feed_off_deployment_gates_on_data(client, tenant, monkeypatch, method, 
     computable → reason 'feed', still upsold to pro (the cheapest tier that bundles it)."""
     monkeypatch.setattr(settings, "tier_simulator", False)
     monkeypatch.setattr(settings, "default_tier", "personal")
-    monkeypatch.setattr(settings, "market_data_sync_enabled", False)
+    monkeypatch.setattr(settings, "feed_entitled", False)
     pid = _portfolio(client, tenant)
     body = _call(client, method, tenant, pid, path).json()
     assert body["computable"] is False
@@ -78,7 +80,7 @@ def test_entitled_deployment_passes_gate_to_the_analytics(client, tenant, monkey
     `required_tier` stays None (the entitlement matrix didn't block it)."""
     monkeypatch.setattr(settings, "tier_simulator", False)
     monkeypatch.setattr(settings, "default_tier", "personal")
-    monkeypatch.setattr(settings, "market_data_sync_enabled", True)
+    monkeypatch.setattr(settings, "feed_entitled", True)
     pid = _portfolio(client, tenant)
     body = _call(client, method, tenant, pid, path).json()
     assert body["required_tier"] is None
@@ -91,7 +93,7 @@ def test_preview_headers_ignored_when_simulator_off(client, tenant, monkeypatch,
     entitled deployment still computes despite a beta/feed-off preview header."""
     monkeypatch.setattr(settings, "tier_simulator", False)
     monkeypatch.setattr(settings, "default_tier", "personal")
-    monkeypatch.setattr(settings, "market_data_sync_enabled", True)
+    monkeypatch.setattr(settings, "feed_entitled", True)
     pid = _portfolio(client, tenant)
     body = _call(
         client, method, tenant, pid, path,
@@ -106,7 +108,7 @@ def test_simulator_honors_preview_feed_off(client, tenant, monkeypatch, method, 
     the simulator's feed toggle is faithful all the way to the API."""
     monkeypatch.setattr(settings, "tier_simulator", True)
     monkeypatch.setattr(settings, "default_tier", "personal")
-    monkeypatch.setattr(settings, "market_data_sync_enabled", True)
+    monkeypatch.setattr(settings, "feed_entitled", True)
     pid = _portfolio(client, tenant)
     body = _call(client, method, tenant, pid, path, headers={"X-Preview-Feed": "false"}).json()
     assert body["computable"] is False
@@ -118,7 +120,7 @@ def test_simulator_honors_preview_feed_off(client, tenant, monkeypatch, method, 
 def test_simulator_preview_beta_gates_on_tier(client, tenant, monkeypatch, method, path):
     monkeypatch.setattr(settings, "tier_simulator", True)
     monkeypatch.setattr(settings, "default_tier", "personal")
-    monkeypatch.setattr(settings, "market_data_sync_enabled", True)
+    monkeypatch.setattr(settings, "feed_entitled", True)
     pid = _portfolio(client, tenant)
     body = _call(client, method, tenant, pid, path, headers={"X-Preview-Tier": "beta"}).json()
     assert body["computable"] is False
@@ -132,7 +134,7 @@ def test_simulator_bad_preview_tier_falls_back_not_500(client, tenant, monkeypat
     entitlement (personal + feed on → not gated)."""
     monkeypatch.setattr(settings, "tier_simulator", True)
     monkeypatch.setattr(settings, "default_tier", "personal")
-    monkeypatch.setattr(settings, "market_data_sync_enabled", True)
+    monkeypatch.setattr(settings, "feed_entitled", True)
     pid = _portfolio(client, tenant)
     res = _call(client, method, tenant, pid, path, headers={"X-Preview-Tier": "bogus"})
     assert res.status_code == 200

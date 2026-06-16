@@ -70,15 +70,16 @@ def entitlements_endpoint(
     """Resolve the active tier's per-feature availability.
 
     Effective tier = this deployment's ``default_tier`` and ``feed`` = whether the
-    licensed market-data feed is provisioned (``market_data_sync_enabled``). When
-    the **tier simulator** is on (``tier_simulator`` — owner-only, never on the
+    licensed market-data feed is provisioned for entitlement (``feed_entitled`` —
+    decoupled from the S3 ``market_data_sync_enabled`` infra toggle per metron-ops#43).
+    When the **tier simulator** is on (``tier_simulator`` — owner-only, never on the
     public product), ``?preview_tier=`` / ``?preview_feed=`` override them so the
     personal build can render any product level (Beta / Pro / Research+ / Base) and
     toggle the feed to see exactly what each level excludes. Simulator off → the
     preview params are ignored (a public caller can't re-scope its entitlements).
     """
     tier = settings.default_tier
-    feed = settings.market_data_sync_enabled
+    feed = settings.feed_entitled
     if settings.tier_simulator:
         if preview_tier is not None:
             tier = preview_tier

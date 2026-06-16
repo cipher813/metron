@@ -93,7 +93,7 @@ def test_resolve_unknown_tier_raises():
 def test_endpoint_default_ignores_preview_when_simulator_off(client, monkeypatch):
     monkeypatch.setattr(settings, "tier_simulator", False)
     monkeypatch.setattr(settings, "default_tier", "personal")
-    monkeypatch.setattr(settings, "market_data_sync_enabled", True)
+    monkeypatch.setattr(settings, "feed_entitled", True)
     r = client.get("/meta/entitlements", params={"preview_tier": "beta", "preview_feed": False})
     assert r.status_code == 200
     body = r.json()
