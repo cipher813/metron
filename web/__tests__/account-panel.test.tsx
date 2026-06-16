@@ -13,8 +13,9 @@ const mocks = vi.hoisted(() => ({
   urlAccountIds: [] as string[],
   saveAccountSelectionAction: vi.fn(async (_pid: string, _ids: string[]) => ({ ok: true, message: "" })),
   deleteAccountAction: vi.fn(async (_pid: string, _aid: string) => ({ ok: true, message: "" })),
+  updateAccountTagsAction: vi.fn(async (_pid: string, _aid: string, _patch: unknown) => ({ ok: true, message: "" })),
 }));
-const { replace, refresh, saveAccountSelectionAction, deleteAccountAction } = mocks;
+const { replace, refresh, saveAccountSelectionAction, deleteAccountAction, updateAccountTagsAction } = mocks;
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mocks.replace, refresh: mocks.refresh }),
@@ -25,6 +26,7 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/app/portfolios/[id]/actions", () => ({
   saveAccountSelectionAction: mocks.saveAccountSelectionAction,
   deleteAccountAction: mocks.deleteAccountAction,
+  updateAccountTagsAction: mocks.updateAccountTagsAction,
 }));
 
 import { AccountPanel } from "@/components/account-panel";
@@ -59,6 +61,7 @@ beforeEach(() => {
   refresh.mockClear();
   saveAccountSelectionAction.mockClear();
   deleteAccountAction.mockClear();
+  updateAccountTagsAction.mockClear();
   mocks.urlAccountIds = [];
   vi.spyOn(window, "confirm").mockReturnValue(true);
 });
@@ -130,5 +133,50 @@ describe("delete", () => {
     await waitFor(() => expect(screen.getByText("Delete failed — backend reachable?")).toBeInTheDocument());
     expect(replace).not.toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
+  });
+});
+
+describe("tax-status grouping + inline override", () => {
+  const taxed = (id: string, name: string, treatment: string | null): Account =>
+    ({ ...acct(id, name), tax_treatment: treatment, taxable: treatment !== "tax_deferred" && treatment !== "tax_exempt" }) as Account;
+
+  it("groups accounts by tax status with subtotals + a grand total", () => {
+    const mixed = [
+      taxed("a1", "Brokerage", "taxable"),
+      taxed("a2", "IRA", "tax_deferred"),
+      taxed("a3", "HSA", "tax_exempt"),
+    ];
+    render(<AccountPanel accounts={mixed} baseCurrency="USD" portfolioId="p" />);
+    // One group header per distinct tax status + their subtotals, plus a grand total.
+    expect(screen.getByText("Taxable · 1")).toBeInTheDocument();
+    expect(screen.getByText("Tax-deferred · 1")).toBeInTheDocument();
+    expect(screen.getByText("Tax-exempt · 1")).toBeInTheDocument();
+    expect(screen.getByText("Taxable subtotal")).toBeInTheDocument();
+    expect(screen.getByText("All accounts total")).toBeInTheDocument();
+    // All three rows still carry their selection checkboxes (grouping is presentational).
+    expect(screen.getByLabelText("Include Brokerage")).toBeInTheDocument();
+    expect(screen.getByLabelText("Include IRA")).toBeInTheDocument();
+  });
+
+  it("a single tax status shows the grand total but no per-group subtotals", () => {
+    renderPanel(); // ACCOUNTS are all taxable → one group
+    expect(screen.getByText("All accounts total")).toBeInTheDocument();
+    expect(screen.queryByText("Taxable subtotal")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Taxable · /)).not.toBeInTheDocument();
+  });
+
+  it("changing the inline tax treatment patches the account and refreshes", async () => {
+    renderPanel();
+    fireEvent.change(screen.getByLabelText("Tax treatment for Brokerage"), { target: { value: "tax_deferred" } });
+    await waitFor(() =>
+      expect(updateAccountTagsAction).toHaveBeenCalledWith("p", "a1", { tax_treatment: "tax_deferred" }),
+    );
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+
+  it("selecting Auto sends a null tax_treatment (clears the override)", async () => {
+    render(<AccountPanel accounts={[taxed("a1", "Brokerage", "taxable")]} baseCurrency="USD" portfolioId="p" />);
+    fireEvent.change(screen.getByLabelText("Tax treatment for Brokerage"), { target: { value: "" } });
+    await waitFor(() => expect(updateAccountTagsAction).toHaveBeenCalledWith("p", "a1", { tax_treatment: null }));
   });
 });
