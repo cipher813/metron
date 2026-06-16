@@ -53,7 +53,7 @@ describe("PortfolioNav", () => {
     expect(screen.getByRole("menuitem", { name: "Advisor" })).toHaveAttribute("href", "/portfolios/p/advisor");
   });
 
-  it("locks a feature the active tier excludes — non-clickable, with the upsell tier", () => {
+  it("HIDES a feed-dependent page (Risk) when the feed entitlement is off (beta)", () => {
     render(
       <PortfolioNav
         portfolioId="p"
@@ -65,13 +65,24 @@ describe("PortfolioNav", () => {
       />,
     );
     open();
-    const risk = screen.getByRole("menuitem", { name: /Risk/ });
-    expect(risk).toHaveAttribute("aria-disabled", "true");
-    expect(risk).not.toHaveAttribute("href"); // not a link
-    expect(risk).toHaveTextContent("Pro"); // upsell badge
-    // Available + ungated pages stay clickable links.
+    // metron-ops#53: feed-dependent pages are hidden in the no-feed beta, not shown locked.
+    expect(screen.queryByRole("menuitem", { name: /Risk/ })).not.toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Overview" })).toHaveAttribute("href");
-    expect(screen.getByRole("menuitem", { name: "Calendar" })).toHaveAttribute("href");
+  });
+
+  it("locks a NON-feed feature the active tier excludes — non-clickable, upsell tier", () => {
+    render(
+      <PortfolioNav
+        portfolioId="p"
+        navQuery=""
+        featureStates={{ macro: { available: false, required_tier: "pro" } }}
+      />,
+    );
+    open();
+    const macro = screen.getByRole("menuitem", { name: /Macro/ });
+    expect(macro).toHaveAttribute("aria-disabled", "true");
+    expect(macro).not.toHaveAttribute("href"); // not a link
+    expect(macro).toHaveTextContent("Pro"); // upsell badge
   });
 
   it("leaves all pages clickable when no featureStates given (ungated)", () => {

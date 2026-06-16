@@ -5,7 +5,7 @@ import { PortfolioNav } from "@/components/portfolio-nav";
 import { BuildHistory } from "@/components/build-history";
 import { NavChart } from "@/components/nav-chart";
 import { TierSimulator } from "@/components/tier-simulator";
-import { loadEntitlements } from "@/lib/entitlements";
+import { loadEntitlements, toFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
 import { resolveAccountIds } from "@/lib/selection";
 
@@ -46,7 +46,7 @@ export default async function PerformancePage({
 
   return (
     <div>
-      <PortfolioNav portfolioId={id} navQuery={navQuery} />
+      <PortfolioNav portfolioId={id} navQuery={navQuery} featureStates={toFeatureStates(entitlements)} />
 
       {entitlements ? <TierSimulator entitlements={entitlements} /> : null}
 

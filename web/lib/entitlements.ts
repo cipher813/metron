@@ -39,6 +39,12 @@ export function toFeatureStates(
   );
 }
 
+/** Load + map in one call — the nav lock/hide state for PortfolioNav. Every portfolio
+ *  page passes this so feed-dependent pages hide consistently in the beta (metron-ops#53). */
+export async function navFeatureStates(tenantId: string): Promise<Record<string, NavFeatureState> | undefined> {
+  return toFeatureStates(await loadEntitlements(tenantId));
+}
+
 /** One feature's full entitlement entry (for the full-page <Locked> gate). */
 export function featureEntitlement(entitlements: Entitlements | null, key: string): Entitlement | undefined {
   return entitlements?.features.find((f) => f.key === key);

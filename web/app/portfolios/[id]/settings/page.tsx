@@ -1,6 +1,7 @@
 import { getAccounts, getExcludedAccounts, getPortfolio, getPreferences, MetronApiError, type ExcludedAccount, type Preferences } from "@/lib/api";
 import { Empty, Section, Table } from "@/components/ui";
 import { AccountTagRow, BaseCurrencyForm, ExcludedAccountRow, PreferencesForm } from "@/components/settings-forms";
+import { navFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
 import { ImportPanel } from "@/components/import-panel";
 import { PortfolioNav } from "@/components/portfolio-nav";
@@ -11,6 +12,7 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage({ params }: { params: { id: string } }) {
   const { id } = params;
   const tenantId = await requireTenantId();
+  const featureStates = await navFeatureStates(tenantId);
 
   let portfolio, accounts, preferences: Preferences, excluded: ExcludedAccount[];
   try {
@@ -29,7 +31,7 @@ export default async function SettingsPage({ params }: { params: { id: string } 
 
   return (
     <div>
-      <PortfolioNav portfolioId={id} navQuery="" />
+      <PortfolioNav portfolioId={id} navQuery="" featureStates={featureStates} />
 
       <h1 className="mt-3 text-lg font-semibold">Settings &amp; data</h1>
       <p className="text-sm text-muted">

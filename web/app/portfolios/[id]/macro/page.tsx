@@ -2,6 +2,7 @@ import { getMacro, MetronApiError, type MacroIndicator } from "@/lib/api";
 import { isoDate, signClass } from "@/lib/format";
 import { Empty, Section, Table } from "@/components/ui";
 import { PortfolioNav } from "@/components/portfolio-nav";
+import { navFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -20,6 +21,7 @@ function change(ind: MacroIndicator): string {
 export default async function MacroPage({ params }: { params: { id: string } }) {
   const { id } = params;
   const tenantId = await requireTenantId();
+  const featureStates = await navFeatureStates(tenantId);
 
   let macro;
   try {
@@ -33,7 +35,7 @@ export default async function MacroPage({ params }: { params: { id: string } }) 
 
   return (
     <div>
-      <PortfolioNav portfolioId={id} navQuery="" />
+      <PortfolioNav portfolioId={id} navQuery="" featureStates={featureStates} />
 
       <h1 className="mt-3 text-lg font-semibold">Macro</h1>
       <p className="text-sm text-muted">

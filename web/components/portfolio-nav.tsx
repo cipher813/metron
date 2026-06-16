@@ -15,6 +15,10 @@ export type NavFeatureState = { available: boolean; required_tier: string | null
 // Short upsell labels for the lock badge (required_tier key → display).
 const TIER_LABEL: Record<string, string> = { pro: "Pro", agentic: "Research+", personal: "Base" };
 
+// Pages that need the market-data feed to function — HIDDEN (not shown locked/empty) in
+// the no-feed beta (metron-ops#53). They reappear when the feed entitlement is on.
+const FEED_DEPENDENT = new Set(["risk", "attribution", "scenarios", "calendar"]);
+
 export function PortfolioNav({
   portfolioId,
   name,
@@ -63,7 +67,7 @@ export function PortfolioNav({
     { label: "Transactions & realized", href: `${base}/transactions${navQuery}`, feature: "transactions" },
     { label: "Tax", href: `${base}/tax${navQuery}`, feature: "tax" },
     { label: "Macro", href: `${base}/macro`, feature: "macro" },
-    { label: "Calendar", href: `${base}/calendar` },
+    { label: "Calendar", href: `${base}/calendar`, feature: "calendar" },
     { label: "Watchlist", href: `${base}/watchlist` },
     ...plugins.map((p) => ({ label: p.label, href: `${base}/${p.href}` })),
     { label: "Settings & data", href: `${base}/settings` },
@@ -106,8 +110,12 @@ export function PortfolioNav({
               const active = p.href.split("?")[0] === pathname;
               const state = p.feature ? featureStates?.[p.feature] : undefined;
               if (state && !state.available) {
-                // Locked: not in the active tier (or needs the market-data feed).
-                // Rendered non-clickable with the upsell tier so the boundary is visible.
+                // Feed-dependent pages (Risk / Attribution / Scenarios / Calendar) are
+                // HIDDEN in the no-feed beta rather than shown locked-and-empty — they
+                // can't function without the market-data feed (metron-ops#53). Other
+                // tier-locked pages still render as a visible upsell boundary.
+                if (p.feature && FEED_DEPENDENT.has(p.feature)) return null;
+                // Locked: not in the active tier. Non-clickable with the upsell tier.
                 return (
                   <div
                     key={p.label}

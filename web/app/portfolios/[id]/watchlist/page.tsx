@@ -2,6 +2,7 @@ import { getWatchlist, MetronApiError } from "@/lib/api";
 import { Empty } from "@/components/ui";
 import { PortfolioNav } from "@/components/portfolio-nav";
 import { WatchlistPanel } from "@/components/watchlist-panel";
+import { navFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,7 @@ export const dynamic = "force-dynamic";
 export default async function WatchlistPage({ params }: { params: { id: string } }) {
   const { id } = params;
   const tenantId = await requireTenantId();
+  const featureStates = await navFeatureStates(tenantId);
 
   let entries;
   try {
@@ -22,7 +24,7 @@ export default async function WatchlistPage({ params }: { params: { id: string }
 
   return (
     <div>
-      <PortfolioNav portfolioId={id} navQuery="" />
+      <PortfolioNav portfolioId={id} navQuery="" featureStates={featureStates} />
 
       <h1 className="mt-3 text-lg font-semibold">Watchlist</h1>
       <p className="text-sm text-muted">
