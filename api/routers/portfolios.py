@@ -393,18 +393,20 @@ def _effective_entitlement(
     """Resolve one feature's entitlement for the request's effective tier + feed.
 
     The effective tier/feed is this deployment's (``default_tier`` +
-    ``market_data_sync_enabled``). When the **tier simulator** is on (owner-only,
-    never on the public product) the ``X-Preview-Tier`` / ``X-Preview-Feed`` headers
-    override them — mirroring ``GET /meta/entitlements`` so a feed toggle in the
-    simulator is honored server-side too. A bad preview tier falls back to the
-    deployment default rather than 500-ing the compute call.
+    ``feed_entitled`` — the entitlement feed axis, decoupled from the S3
+    ``market_data_sync_enabled`` infra toggle per metron-ops#43). When the **tier
+    simulator** is on (owner-only, never on the public product) the
+    ``X-Preview-Tier`` / ``X-Preview-Feed`` headers override them — mirroring
+    ``GET /meta/entitlements`` so a feed toggle in the simulator is honored
+    server-side too. A bad preview tier falls back to the deployment default rather
+    than 500-ing the compute call.
 
     Returns the per-feature dict from ``entitlements.resolve`` (``available`` /
     ``reason`` / ``required_tier`` / …) so callers can short-circuit a feed-dependent
     endpoint into an honest not-computable response when the tier excludes it.
     """
     tier = settings.default_tier
-    feed = settings.market_data_sync_enabled
+    feed = settings.feed_entitled
     if settings.tier_simulator:
         if x_preview_tier is not None:
             tier = x_preview_tier
@@ -413,7 +415,7 @@ def _effective_entitlement(
     try:
         resolved = ent.resolve(tier, feed_enabled=feed)
     except ValueError:
-        resolved = ent.resolve(settings.default_tier, feed_enabled=settings.market_data_sync_enabled)
+        resolved = ent.resolve(settings.default_tier, feed_enabled=settings.feed_entitled)
     return next(f for f in resolved["features"] if f["key"] == feature_key)
 
 

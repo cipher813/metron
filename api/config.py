@@ -22,9 +22,19 @@ class Settings(BaseSettings):
     # sole market-data producer; Metron publishes its held-ticker universe here and reads
     # back EOD-close / FX artifacts (no direct market-data API calls). The bucket is the
     # shared alpha-engine S3 store. OFF by default so dev/tests never reach S3; the prod
-    # deploy sets MARKET_DATA_SYNC_ENABLED=true (instance role grants the bucket).
+    # deploy sets MARKET_DATA_SYNC_ENABLED=true (instance role grants the bucket). This is
+    # an INFRA toggle ONLY — it does NOT gate the entitlement feed axis (see feed_entitled).
     market_data_bucket: str = "alpha-engine-research"
     market_data_sync_enabled: bool = False
+    # Feed entitlement (entitlement axis 2): does this deployment OFFER the feed-dependent
+    # wedge (risk / attribution / scenarios / benchmark)? DECOUPLED from
+    # market_data_sync_enabled (the S3 data-spine infra toggle above) so the owner build
+    # never self-gates its own analytics — risk/attribution compute factor history via
+    # on-demand price backfill, independent of the S3 spine. Default True (the personal/
+    # owner build is fully provisioned). The public multi-tenant BETA deploy sets
+    # FEED_ENTITLED=false (+ DEFAULT_TIER=beta) so the no-feed beta shows only the
+    # free-derivable set. See metron-ops#43 (the conflation that emptied the owner risk page).
+    feed_entitled: bool = True
     # Product tier this deployment serves. The personal build runs the full
     # "personal" superset; real per-tenant subscription gating supersedes this in M2.
     default_tier: str = "personal"

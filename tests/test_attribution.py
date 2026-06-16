@@ -143,9 +143,10 @@ class TestComputeAttribution:
 class TestAttributionEndpoints:
     def test_compute_then_get(self, client, tenant, monkeypatch):
         # Attribution is feed-dependent; the endpoint enforces the entitlement matrix,
-        # so this models a feed-provisioned (entitled) deployment (see test_risk's
+        # so this models a feed-entitled deployment (feed_entitled — decoupled from the
+        # S3 market_data_sync_enabled infra toggle per metron-ops#43; see test_risk's
         # test_compute_then_get + test_entitlements_enforcement.py).
-        monkeypatch.setattr(settings, "market_data_sync_enabled", True)
+        monkeypatch.setattr(settings, "feed_entitled", True)
         pid = _seed(client, tenant)
         _refresh(client, tenant, pid, monkeypatch)
         monkeypatch.setattr("api.services.prices.fetch_close_history", _full_hist)
