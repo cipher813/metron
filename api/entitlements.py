@@ -63,6 +63,9 @@ FEATURES: tuple[Feature, ...] = (
     Feature("risk", "Risk (factor / TE / look-through)", ("feed",)),
     Feature("attribution", "Attribution (Brinson)", ("feed",)),
     Feature("scenarios", "Scenarios / stress", ("feed",)),
+    # Earnings calendar comes from the data-spine (yfinance-derived) → feed-gated, so it's
+    # hidden in the no-feed beta rather than shown empty (metron-ops#52/#53).
+    Feature("calendar", "Calendar (earnings)", ("feed",)),
     Feature("etf_lookthrough", "ETF look-through", ("etf_vendor",)),
     Feature("agentic_research", "Agentic quant research", ("feed",)),
     Feature("ai_advisor", "AI Advisor", ()),
@@ -83,7 +86,7 @@ _BETA = frozenset({
     "overview", "income", "transactions", "tax",
     "concentration", "performance", "macro", "fundamentals",
 })
-_PRO = _BETA | {"auto_sync", "benchmark", "risk", "attribution", "scenarios", "etf_lookthrough"}
+_PRO = _BETA | {"auto_sync", "benchmark", "risk", "attribution", "scenarios", "calendar", "etf_lookthrough"}
 _AGENTIC = _PRO | {"agentic_research"}
 _PERSONAL = _AGENTIC | {"ai_advisor", "alpha_engine"}
 

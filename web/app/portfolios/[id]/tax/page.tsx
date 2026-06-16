@@ -2,6 +2,7 @@ import { acctParams, getSummary, getTax, MetronApiError } from "@/lib/api";
 import { isoDate, money, quantity, signClass, signedMoney } from "@/lib/format";
 import { Empty, Section, StatCard, Table } from "@/components/ui";
 import { PortfolioNav } from "@/components/portfolio-nav";
+import { navFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
 import { resolveAccountIds } from "@/lib/selection";
 
@@ -16,6 +17,7 @@ export default async function TaxPage({
 }) {
   const { id } = params;
   const tenantId = await requireTenantId();
+  const featureStates = await navFeatureStates(tenantId);
 
   // URL selection wins; with none, the saved panel selection is applied (redirect).
   const accountIds = await resolveAccountIds(tenantId, id, `/portfolios/${id}/tax`, searchParams.account_id);
@@ -39,7 +41,7 @@ export default async function TaxPage({
 
   return (
     <div>
-      <PortfolioNav portfolioId={id} navQuery={navQuery} />
+      <PortfolioNav portfolioId={id} navQuery={navQuery} featureStates={featureStates} />
 
       <h1 className="mt-3 text-lg font-semibold">Tax</h1>
       <p className="text-sm text-muted">

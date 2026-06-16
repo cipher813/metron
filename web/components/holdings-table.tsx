@@ -281,8 +281,16 @@ function TickerCell({ h, portfolioId }: { h: Holding; portfolioId?: string }) {
     );
   }
 
+  // A numeric / CUSIP-style ticker (bonds, CDs, treasuries) is unreadable without a
+  // name, so prompt for one explicitly when there's no label yet (metron-ops#57).
+  const numericish = /^\d/.test(h.ticker);
+  const startEdit = () => {
+    setValue(h.user_label ?? "");
+    setEditing(true);
+  };
+
   return (
-    <span className="group inline-flex items-baseline gap-1">
+    <span className="inline-flex items-baseline gap-1">
       {h.user_label ? (
         <>
           <span>{h.user_label}</span>
@@ -291,18 +299,26 @@ function TickerCell({ h, portfolioId }: { h: Holding; portfolioId?: string }) {
       ) : (
         <span>{h.ticker}</span>
       )}
-      <button
-        type="button"
-        onClick={() => {
-          setValue(h.user_label ?? "");
-          setEditing(true);
-        }}
-        aria-label={`${h.user_label ? "Edit" : "Add"} label for ${h.ticker}`}
-        title={h.user_label ? "Edit label" : "Add a label/alias"}
-        className="text-xs font-normal text-muted opacity-0 transition hover:text-ink group-hover:opacity-100"
-      >
-        ✎
-      </button>
+      {!h.user_label && numericish ? (
+        <button
+          type="button"
+          onClick={startEdit}
+          aria-label={`Add label for ${h.ticker}`}
+          className="rounded border border-line px-1 text-[10px] font-normal uppercase tracking-wide text-accent hover:bg-white/5"
+        >
+          + name
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={startEdit}
+          aria-label={`${h.user_label ? "Edit" : "Add"} label for ${h.ticker}`}
+          title={h.user_label ? "Edit label" : "Add a label/alias"}
+          className="text-xs font-normal text-muted transition hover:text-ink"
+        >
+          ✎
+        </button>
+      )}
     </span>
   );
 }

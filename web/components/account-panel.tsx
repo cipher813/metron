@@ -95,13 +95,16 @@ function MetricCells({
   muted?: boolean;
 }) {
   const pct = unreal != null && cost ? unreal / cost : null;
+  // FIXED-width columns so the Cost / Unrealized / Market figures line up vertically
+  // across every account row, subtotal and the grand total (metron-ops#54 — auto-width
+  // grid columns sized per-row, so larger-magnitude accounts shifted out of alignment).
   return (
-    <div className="grid shrink-0 grid-cols-3 gap-x-6 text-right text-sm tabular-nums">
-      <div>
+    <div className="flex shrink-0 gap-x-6 text-right text-sm tabular-nums">
+      <div className="w-24">
         <div className="text-[10px] uppercase tracking-wide text-muted">Cost</div>
         <div className={muted ? "text-muted" : undefined}>{cost != null ? moneyWhole(cost, baseCurrency) : "—"}</div>
       </div>
-      <div>
+      <div className="w-32">
         <div className="text-[10px] uppercase tracking-wide text-muted">Unrealized</div>
         <div className={unreal != null ? signClass(unreal) : "text-muted"}>
           {unreal != null ? (
@@ -114,7 +117,7 @@ function MetricCells({
           )}
         </div>
       </div>
-      <div>
+      <div className="w-24">
         <div className="text-[10px] uppercase tracking-wide text-muted">Market</div>
         <div className={muted ? "text-muted" : undefined}>{mv != null ? moneyWhole(mv, baseCurrency) : "—"}</div>
       </div>
@@ -275,12 +278,12 @@ export function AccountPanel({
               onChange={(e) => setTreatment(a, e.target.value)}
               disabled={saving}
               aria-label={`Tax treatment for ${accountLabel(a)}`}
-              title="Correct the tax status (Auto derives from the broker/keywords)"
+              title="Tax status — change if it's wrong"
               className="rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted hover:text-ink disabled:opacity-50"
             >
               {TAX_TREATMENTS.map((t) => (
                 <option key={t.value} value={t.value}>
-                  {t.value === "" ? `Auto (${typeLabel(a)})` : t.label}
+                  {t.value === "" ? typeLabel(a) : t.label}
                 </option>
               ))}
             </select>

@@ -3,7 +3,7 @@ import { isoDate } from "@/lib/format";
 import { Empty, Section, Table } from "@/components/ui";
 import { PortfolioNav } from "@/components/portfolio-nav";
 import { RefreshCalendar } from "@/components/refresh-calendar";
-import { loadEntitlements } from "@/lib/entitlements";
+import { loadEntitlements, toFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -26,7 +26,7 @@ export default async function CalendarPage({ params }: { params: { id: string } 
 
   return (
     <div>
-      <PortfolioNav portfolioId={id} navQuery="" />
+      <PortfolioNav portfolioId={id} navQuery="" featureStates={toFeatureStates(entitlements)} />
 
       <h1 className="mt-3 text-lg font-semibold">Calendar</h1>
       <p className="text-sm text-muted">

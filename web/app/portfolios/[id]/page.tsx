@@ -73,17 +73,7 @@ export default async function PortfolioPage({
         <RenamePortfolio portfolioId={id} name={portfolio.name} />
       </div>
 
-      <Section title="Accounts">
-        <AccountPanel accounts={accounts} baseCurrency={ccy} portfolioId={id} />
-        {scoped ? (
-          <p className="mt-2 text-xs text-muted">
-            Showing {summary.n_accounts} of {accounts.length} account{accounts.length === 1 ? "" : "s"} — totals,
-            holdings, income, Risk and Attribution below reflect this selection. (Performance stays whole-portfolio.)
-          </p>
-        ) : null}
-      </Section>
-
-      <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         {priced ? (
           <>
             <StatCard
@@ -117,6 +107,16 @@ export default async function PortfolioPage({
           {ccy} totals — no FX rate cached yet. Refresh prices to fetch it.
         </p>
       ) : null}
+
+      <Section title="Accounts">
+        <AccountPanel accounts={accounts} baseCurrency={ccy} portfolioId={id} />
+        {scoped ? (
+          <p className="mt-2 text-xs text-muted">
+            Showing {summary.n_accounts} of {accounts.length} account{accounts.length === 1 ? "" : "s"} — totals,
+            holdings, income, Risk and Attribution below reflect this selection. (Performance stays whole-portfolio.)
+          </p>
+        ) : null}
+      </Section>
 
       <Section title="Holdings" note={priced ? `all values in ${ccy} · market value from last EOD close` : "cost basis — refresh for market value"}>
         <div className="mb-3">
