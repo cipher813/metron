@@ -27,6 +27,15 @@ from api.services import prices as price_service
 from portfolio_analytics.domain.ledger import TxnType
 from portfolio_analytics.prices import ClosePoint, HistorySource, fetch_latest_closes
 
+# Don't extrapolate a sub-month observation window to a yearly rate. Annualizing a few
+# days of return — annualized_twr = (1+twr)^(365.25/days) − 1 — explodes for small
+# `days` (e.g. +1% over 3 days → +236% annualized), and annualizing volatility/Sharpe
+# from a handful of same-week returns is just as misleading. Below this span the
+# ANNUALIZED figures (annualized_twr, volatility, sharpe, sortino) stay None
+# ("history is building"); the window-agnostic figures (cumulative, TWR, max drawdown)
+# are always shown. (metron-ops#44 — these short-window annualized values read as wrong.)
+_MIN_ANNUALIZE_DAYS = 30
+
 
 def _external_flow_on(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, when: date) -> float:
     """Net external cash flow into the portfolio on ``when`` (deposits +, withdrawals −).
@@ -241,19 +250,25 @@ def _apply_risk_and_alpha(summary: PerformanceSummary, points: list[PerfPoint]) 
     feed): risk metrics run on the flow-neutralized return series, and max drawdown on
     its growth index — so a deposit reads as capital in, never as a return. Annualization
     uses an **empirical** periods-per-year (return count over elapsed years), robust to
-    the irregular snapshot cadence rather than assuming 252 trading days."""
+    the irregular snapshot cadence rather than assuming 252 trading days. Sharpe/Sortino
+    assume a 0% risk-free rate. Annualized risk stats are suppressed for a sub-month
+    window (see ``_MIN_ANNUALIZE_DAYS``); max drawdown is window-agnostic and always set."""
     rets = _flow_neutralized_returns(points)
     if rets:
         # Growth index of the flow-neutralized returns → honest peak-to-trough drawdown.
+        # Window-agnostic (a real drawdown at any span), so it's computed unconditionally.
         index = [1.0]
         for r in rets:
             index.append(index[-1] * (1.0 + r))
         summary.max_drawdown = max_drawdown(index)
-        years = summary.days / 365.25 if summary.days > 0 else 0.0
-        ppy = len(rets) / years if years > 0 else 252.0
-        summary.volatility = volatility(rets, periods_per_year=ppy)
-        summary.sharpe = sharpe_ratio(rets, periods_per_year=ppy)
-        summary.sortino = sortino_ratio(rets, periods_per_year=ppy)
+        # Annualized vol/Sharpe/Sortino only once the window is long enough to annualize;
+        # below that the empirical periods-per-year blows them up (metron-ops#44).
+        if summary.days >= _MIN_ANNUALIZE_DAYS:
+            years = summary.days / 365.25
+            ppy = len(rets) / years
+            summary.volatility = volatility(rets, periods_per_year=ppy)
+            summary.sharpe = sharpe_ratio(rets, periods_per_year=ppy)
+            summary.sortino = sortino_ratio(rets, periods_per_year=ppy)
 
     spy = [p.spy_close for p in points if p.spy_close is not None]
     if len(spy) >= 2 and spy[0] > 0:
@@ -302,7 +317,7 @@ def performance(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID)
     summary.twr = time_weighted_return(
         [ValuationPoint(when=p.snap_date, value=p.nav - p.external_flow, flow=p.external_flow) for p in points]
     )
-    if summary.twr is not None and summary.days > 0:
+    if summary.twr is not None and summary.days >= _MIN_ANNUALIZE_DAYS:
         summary.annualized_twr = annualize(summary.twr, summary.days)
     _apply_risk_and_alpha(summary, points)
     return summary

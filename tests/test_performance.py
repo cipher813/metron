@@ -152,6 +152,51 @@ class TestRiskAndAlpha:
         assert p["max_drawdown"] == pytest.approx(0.0)
 
 
+class TestShortWindowAnnualizationGuard:
+    """A sub-month window must NOT annualize: (1+twr)^(365/days) blows up for tiny `days`
+    (and annualized vol/Sharpe from a few same-week returns is just as misleading), so
+    the ANNUALIZED figures stay None while the window-agnostic ones (cumulative, TWR,
+    max drawdown) still show. (metron-ops#44)"""
+
+    def test_few_day_window_suppresses_annualized_metrics(self, client, db_session, tenant):
+        pid = _seed(client, tenant)
+        # 6-day span, 3 returns, with a dip so a drawdown exists.
+        _insert_snapshot(db_session, tenant, pid, date(2024, 1, 1), nav=1000.0)
+        _insert_snapshot(db_session, tenant, pid, date(2024, 1, 3), nav=1010.0)
+        _insert_snapshot(db_session, tenant, pid, date(2024, 1, 5), nav=1005.0)
+        _insert_snapshot(db_session, tenant, pid, date(2024, 1, 7), nav=1020.0)
+        p = client.get(f"/portfolios/{pid}/performance", headers=_hdr(tenant)).json()
+        assert p["days"] == 6
+        # Window-agnostic figures still shown (and sane — NOT extrapolated to a year).
+        assert p["twr"] is not None
+        assert p["cumulative_return"] == pytest.approx(0.02)  # 1020/1000 − 1
+        assert p["max_drawdown"] == pytest.approx(1005 / 1010 - 1)  # peak 1010 → trough 1005
+        # Annualized figures suppressed — no absurd extrapolation from 6 days.
+        assert p["annualized_twr"] is None
+        assert p["volatility"] is None
+        assert p["sharpe"] is None
+        assert p["sortino"] is None
+
+    def test_29_day_window_suppresses_but_30_day_annualizes(self, client, db_session, tenant):
+        # 29 days → just under the floor → no annualized TWR.
+        pid = _seed(client, tenant)
+        _insert_snapshot(db_session, tenant, pid, date(2024, 1, 1), nav=1000.0)
+        _insert_snapshot(db_session, tenant, pid, date(2024, 1, 30), nav=1100.0)  # 29 days
+        p = client.get(f"/portfolios/{pid}/performance", headers=_hdr(tenant)).json()
+        assert p["days"] == 29
+        assert p["twr"] == pytest.approx(0.10)
+        assert p["annualized_twr"] is None
+
+        # 30 days → at the floor → annualized TWR computed (matches the existing
+        # test_twr_and_cumulative_over_series boundary).
+        pid2 = _seed(client, tenant)
+        _insert_snapshot(db_session, tenant, pid2, date(2024, 1, 1), nav=1000.0)
+        _insert_snapshot(db_session, tenant, pid2, date(2024, 1, 31), nav=1100.0)  # 30 days
+        p2 = client.get(f"/portfolios/{pid2}/performance", headers=_hdr(tenant)).json()
+        assert p2["days"] == 30
+        assert p2["annualized_twr"] == pytest.approx(1.10 ** (365 / 30) - 1)
+
+
 # --- helpers ---------------------------------------------------------------
 
 
