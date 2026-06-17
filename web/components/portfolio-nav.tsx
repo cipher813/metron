@@ -61,12 +61,13 @@ export function PortfolioNav({
   // Selection-scoped pages carry navQuery; whole-portfolio pages don't.
   const pages: NavPage[] = [
     { label: "Overview", href: `${base}${navQuery}`, feature: "overview" },
+    { label: "Holdings", href: `${base}/holdings${navQuery}`, feature: "overview" },
     { label: "Performance", href: `${base}/performance${navQuery}`, feature: "performance" },
     { label: "Risk", href: `${base}/risk${navQuery}`, feature: "risk" },
     { label: "Attribution", href: `${base}/attribution${navQuery}`, feature: "attribution" },
-    { label: "Transactions & realized", href: `${base}/transactions${navQuery}`, feature: "transactions" },
+    // Tax now bundles the realized lots + transaction ledger (metron-ops#66); Macro moved
+    // to the top of the Overview dashboard (#64) — both former standalone pages redirect.
     { label: "Tax", href: `${base}/tax${navQuery}`, feature: "tax" },
-    { label: "Macro", href: `${base}/macro`, feature: "macro" },
     { label: "Calendar", href: `${base}/calendar`, feature: "calendar" },
     { label: "Watchlist", href: `${base}/watchlist` },
     ...plugins.map((p) => ({ label: p.label, href: `${base}/${p.href}` })),

@@ -1,8 +1,7 @@
-// Compact macro snapshot for the Overview (metron-ops#49) — Macro was buried on its own
-// page; a few key indicators belong on the overview. FRED is public-domain, so it stays
-// in the no-feed beta. Links out to the full Macro page.
+// Compact macro snapshot at the top of the Overview (metron-ops#49, #64) — FRED is
+// public-domain, so it stays in the no-feed beta. The standalone Macro page was retired
+// (#64): these indicators live on the dashboard now.
 
-import Link from "next/link";
 import type { Macro, MacroIndicator } from "@/lib/api";
 import { isoDate, signClass } from "@/lib/format";
 import { Section } from "@/components/ui";
@@ -18,7 +17,7 @@ function change(ind: MacroIndicator): string {
   return ind.units === "%" ? `${sign}${mag} pp` : `${sign}${mag}`;
 }
 
-export function MacroStrip({ macro, portfolioId }: { macro: Macro; portfolioId: string }) {
+export function MacroStrip({ macro }: { macro: Macro }) {
   if (!macro.available || macro.indicators.length === 0) return null;
   return (
     <Section title="Macro" note={macro.as_of ? `FRED · as of ${isoDate(macro.as_of)}` : "FRED"}>
@@ -33,11 +32,6 @@ export function MacroStrip({ macro, portfolioId }: { macro: Macro; portfolioId: 
           </div>
         ))}
       </div>
-      <p className="mt-2 text-xs text-muted">
-        <Link href={`/portfolios/${portfolioId}/macro`} className="text-accent hover:underline">
-          Full macro →
-        </Link>
-      </p>
     </Section>
   );
 }

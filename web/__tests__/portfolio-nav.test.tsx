@@ -34,9 +34,9 @@ describe("PortfolioNav", () => {
     open();
     const href = (name: string) => screen.getByRole("menuitem", { name })!.getAttribute("href");
     expect(href("Performance")).toBe("/portfolios/p/performance?account_id=a1");
+    expect(href("Holdings")).toBe("/portfolios/p/holdings?account_id=a1");
     expect(href("Tax")).toBe("/portfolios/p/tax?account_id=a1");
-    // Macro/Calendar/Settings are whole-portfolio surfaces — no selection query.
-    expect(href("Macro")).toBe("/portfolios/p/macro");
+    // Calendar/Settings are whole-portfolio surfaces — no selection query.
     expect(href("Calendar")).toBe("/portfolios/p/calendar");
     expect(href("Settings & data")).toBe("/portfolios/p/settings");
   });
@@ -75,14 +75,14 @@ describe("PortfolioNav", () => {
       <PortfolioNav
         portfolioId="p"
         navQuery=""
-        featureStates={{ macro: { available: false, required_tier: "pro" } }}
+        featureStates={{ performance: { available: false, required_tier: "pro" } }}
       />,
     );
     open();
-    const macro = screen.getByRole("menuitem", { name: /Macro/ });
-    expect(macro).toHaveAttribute("aria-disabled", "true");
-    expect(macro).not.toHaveAttribute("href"); // not a link
-    expect(macro).toHaveTextContent("Pro"); // upsell badge
+    const perf = screen.getByRole("menuitem", { name: /Performance/ });
+    expect(perf).toHaveAttribute("aria-disabled", "true");
+    expect(perf).not.toHaveAttribute("href"); // not a link
+    expect(perf).toHaveTextContent("Pro"); // upsell badge
   });
 
   it("leaves all pages clickable when no featureStates given (ungated)", () => {
