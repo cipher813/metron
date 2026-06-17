@@ -296,8 +296,8 @@ export const getRealized = (tenantId: string, id: string, accountIds?: string[],
   get<RealizedLot[]>(tenantId, `/portfolios/${id}/realized${activityQuery(accountIds, taxableOnly)}`);
 export const getAccountDetail = (tenantId: string, id: string, accountId: string) =>
   get<AccountDetail>(tenantId, `/portfolios/${id}/accounts/${accountId}`);
-export const getPerformance = (tenantId: string, id: string) =>
-  get<Performance>(tenantId, `/portfolios/${id}/performance`);
+export const getPerformance = (tenantId: string, id: string, accountIds?: string[]) =>
+  get<Performance>(tenantId, `/portfolios/${id}/performance${acctParams(accountIds)}`);
 
 export type Risk = {
   computable: boolean;

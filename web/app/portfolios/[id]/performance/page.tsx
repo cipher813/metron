@@ -26,11 +26,16 @@ export default async function PerformancePage({
   const accountIds = await resolveAccountIds(tenantId, id, `/portfolios/${id}/performance`, searchParams.account_id);
   const navQuery = acctParams(accountIds);
 
-  // Performance is whole-portfolio — per-account NAV history can't be reconstructed for
-  // snapshot-sourced accounts, so the series + summary stay unscoped (note shown below).
+  // Performance is now account-scoped (metron-ops#9): with a selection, the series comes
+  // from those accounts' own forward-recorded NAV snapshots. The summary stays scoped to
+  // the same selection so its Latest-NAV tile matches the series.
+  const scoped = accountIds.length > 0;
   let perf, summary;
   try {
-    [perf, summary] = await Promise.all([getPerformance(tenantId, id), getSummary(tenantId, id)]);
+    [perf, summary] = await Promise.all([
+      getPerformance(tenantId, id, accountIds),
+      getSummary(tenantId, id, accountIds),
+    ]);
   } catch (e) {
     if (e instanceof MetronApiError && e.status === 404) {
       return <Empty>Portfolio not found.</Empty>;
@@ -68,17 +73,22 @@ export default async function PerformancePage({
         NAV records forward each time you refresh prices. To get instant history, build it from past prices.
       </p>
 
-      {accountIds.length > 0 ? (
+      {scoped ? (
         <p className="mt-2 rounded border border-line bg-surface px-3 py-2 text-xs text-muted">
-          ⓘ Performance reflects the whole portfolio. Per-account history is still accruing — snapshot-sourced
-          accounts (IBKR / SnapTrade) have no back-history to reconstruct, so a per-account NAV-vs-SPY series
-          builds forward from today.
+          ⓘ Scoped to your account selection. Per-account NAV can&apos;t be reconstructed from past prices
+          (snapshot-sourced accounts like IBKR / SnapTrade report only current positions), so this series
+          accrues forward from the first day each selected account was recorded — it&apos;ll be short at first
+          and fill in daily. Clear the selection for the full reconstructable portfolio history.
         </p>
       ) : null}
 
-      <div className="mt-3">
-        <BuildHistory portfolioId={id} feedOn={entitlements?.feed_enabled} />
-      </div>
+      {/* Reconstruction is whole-portfolio only (it can't rebuild per-account NAV), so
+          hide it when scoped — the note above tells the user to clear the selection. */}
+      {scoped ? null : (
+        <div className="mt-3">
+          <BuildHistory portfolioId={id} feedOn={entitlements?.feed_enabled} />
+        </div>
+      )}
 
       {hasMetrics ? (
         <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">

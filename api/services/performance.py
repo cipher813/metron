@@ -13,6 +13,8 @@ never a fabricated number.
 from __future__ import annotations
 
 import uuid
+from collections import defaultdict
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -337,30 +339,93 @@ def _apply_risk_and_alpha(summary: PerformanceSummary, points: list[PerfPoint]) 
             summary.alpha = port_return - summary.spy_return
 
 
-def performance(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID) -> PerformanceSummary:
-    """Performance metrics over the recorded snapshot series. Returns counts + None
-    metrics until ≥2 snapshots exist."""
-    snaps = session.scalars(
-        select(models.NavSnapshot)
-        .where(models.NavSnapshot.tenant_id == tenant_id, models.NavSnapshot.portfolio_id == portfolio_id)
-        .order_by(models.NavSnapshot.snap_date)
-    ).all()
-    points = [
-        PerfPoint(
-            snap_date=s.snap_date,
-            nav=float(s.nav),
-            external_flow=float(s.external_flow),
-            spy_close=float(s.spy_close) if s.spy_close is not None else None,
+def _account_perf_series(
+    session: Session, tenant_id: uuid.UUID, account_ids: Collection[uuid.UUID]
+) -> tuple[list[PerfPoint], float | None]:
+    """Aggregate the per-account NAV snapshots for ``account_ids`` into a subset NAV
+    series (metron-ops#9). A day's subset NAV = the SUM of the selected accounts' rows;
+    its flow = the sum of their flows; SPY close is shared.
+
+    Apples-to-apples guard: the series begins only once EVERY account in the selection
+    that ever reports has started (the latest of their first snapshot dates), and each
+    included day requires all of them present. This way an account that starts later
+    never reads as a spurious one-day NAV jump, and gap days are skipped. For a single
+    account it's simply every date that account recorded."""
+    rows = session.scalars(
+        select(models.AccountNavSnapshot)
+        .where(
+            models.AccountNavSnapshot.tenant_id == tenant_id,
+            models.AccountNavSnapshot.account_id.in_(list(account_ids)),
         )
-        for s in snaps
-    ]
+        .order_by(models.AccountNavSnapshot.snap_date)
+    ).all()
+    if not rows:
+        return [], None
+    by_date: dict[date, list] = defaultdict(list)
+    first_seen: dict[uuid.UUID, date] = {}
+    for r in rows:
+        by_date[r.snap_date].append(r)
+        first_seen.setdefault(r.account_id, r.snap_date)
+
+    # The cohort is the accounts that actually reported; the series can't start until the
+    # last of them has data (else its arrival looks like a gain on an otherwise-flat day).
+    cohort = set(first_seen)
+    start = max(first_seen.values())
+    points: list[PerfPoint] = []
+    last_cost: float | None = None
+    for d in sorted(by_date):
+        if d < start:
+            continue
+        present = by_date[d]
+        if {r.account_id for r in present} != cohort:
+            continue  # a gap day for one of the accounts — skip rather than undercount
+        nav = sum(float(r.nav) for r in present)
+        flow = sum(float(r.external_flow) for r in present)
+        spy = next((float(r.spy_close) for r in present if r.spy_close is not None), None)
+        points.append(PerfPoint(snap_date=d, nav=nav, external_flow=flow, spy_close=spy))
+        last_cost = sum(float(r.cost_basis) for r in present if r.cost_basis is not None)
+    return points, last_cost
+
+
+def performance(
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    *,
+    account_ids: Collection[uuid.UUID] | None = None,
+) -> PerformanceSummary:
+    """Performance metrics over the recorded snapshot series. Returns counts + None
+    metrics until ≥2 snapshots exist.
+
+    ``account_ids`` (a non-empty selection) scopes the series to those accounts' own
+    forward-recorded ``AccountNavSnapshot`` rows (metron-ops#9) — per-account NAV can't be
+    reconstructed for snapshot-sourced accounts, so this history accrues forward only.
+    None / empty = the whole-portfolio ``NavSnapshot`` series (also reconstructable)."""
+    if account_ids:
+        points, last_cost_basis = _account_perf_series(session, tenant_id, account_ids)
+    else:
+        snaps = session.scalars(
+            select(models.NavSnapshot)
+            .where(models.NavSnapshot.tenant_id == tenant_id, models.NavSnapshot.portfolio_id == portfolio_id)
+            .order_by(models.NavSnapshot.snap_date)
+        ).all()
+        points = [
+            PerfPoint(
+                snap_date=s.snap_date,
+                nav=float(s.nav),
+                external_flow=float(s.external_flow),
+                spy_close=float(s.spy_close) if s.spy_close is not None else None,
+            )
+            for s in snaps
+        ]
+        last_cost_basis = float(snaps[-1].cost_basis) if snaps else None
     summary = PerformanceSummary(n_snapshots=len(points), points=points)
     if not points:
         return summary
     summary.first_date = points[0].snap_date
     summary.last_date = points[-1].snap_date
     summary.latest_nav = points[-1].nav
-    summary.latest_cost_basis = float(snaps[-1].cost_basis)
+    summary.latest_cost_basis = last_cost_basis
     if len(points) < 2:
         return summary
 
