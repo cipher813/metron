@@ -1338,13 +1338,16 @@ def get_accounts(
 @router.get("/{portfolio_id}/performance", response_model=PerformanceOut)
 def get_performance(
     portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
     session: Session = Depends(get_session),
 ) -> performance.PerformanceSummary:
     """Time-weighted + cumulative return over the recorded NAV snapshot series.
 
     History builds forward as prices are refreshed; metrics are null until ≥2
-    snapshots exist (never a fabricated number)."""
-    return performance.performance(session, portfolio.tenant_id, portfolio.id)
+    snapshots exist (never a fabricated number). A non-empty ``account_id`` selection
+    scopes the series to those accounts' own forward-recorded NAV history (metron-ops#9 —
+    per-account NAV can't be reconstructed, so it accrues forward only)."""
+    return performance.performance(session, portfolio.tenant_id, portfolio.id, account_ids=account_ids)
 
 
 @router.post("/{portfolio_id}/performance/reconstruct", response_model=PerformanceOut)
