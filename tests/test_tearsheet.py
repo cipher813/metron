@@ -76,6 +76,44 @@ def test_tearsheet_position_and_performance(db_session):
     assert "1022" in sheet.fundamentals_reason
 
 
+_FUND_ART = {
+    "as_of": "2026-06-17",
+    "fundamentals": {
+        "AAPL": {
+            "sector": "Technology", "industry": "Consumer Electronics", "marketCap": 3.2e12, "beta": 1.2,
+            "trailingPE": 30.0, "forwardPE": 28.0, "enterpriseToEbitda": 22.0,
+            "earningsGrowth": 0.1, "revenueGrowth": 0.08, "debtToEquity": 150.0,
+            "currentRatio": 1.1, "quickRatio": 0.9, "returnOnEquity": 0.5, "returnOnAssets": 0.2,
+            "grossMargins": 0.44, "operatingMargins": 0.30, "dividendYield": 0.5,
+        }
+    },
+}
+
+
+def test_tearsheet_fundamentals_populate_when_feed_enabled(db_session):
+    tenant_id, pid = _seed(db_session)
+    sheet = tearsheet.tearsheet(
+        db_session, tenant_id, pid, "AAPL", feed_enabled=True, fundamentals_reader=lambda: _FUND_ART
+    )
+    assert sheet.fundamentals_available is True
+    assert sheet.fundamentals is not None
+    assert sheet.fundamentals.trailing_pe == 30.0
+    assert sheet.fundamentals.peg == pytest.approx(3.0)            # 30 / (0.1 * 100)
+    assert sheet.fundamentals.dividend_yield == pytest.approx(0.005)  # 0.5% → fraction
+    assert sheet.technical.forward_div_yield == pytest.approx(0.005)
+    # AAPL is its own comp row, flagged is_self.
+    assert any(c.is_self and c.ticker == "AAPL" for c in sheet.comps)
+
+
+def test_tearsheet_fundamentals_omitted_when_feed_off(db_session):
+    tenant_id, pid = _seed(db_session)
+    sheet = tearsheet.tearsheet(
+        db_session, tenant_id, pid, "AAPL", feed_enabled=False, fundamentals_reader=lambda: _FUND_ART
+    )
+    assert sheet.fundamentals_available is False
+    assert sheet.fundamentals is None
+
+
 def test_tearsheet_none_when_not_held(db_session):
     tenant_id, pid = _seed(db_session)
     assert tearsheet.tearsheet(db_session, tenant_id, pid, "TSLA") is None

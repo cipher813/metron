@@ -398,6 +398,42 @@ export type Tearsheet = {
   };
   fundamentals_available: boolean;
   fundamentals_reason: string;
+  fundamentals: TickerFundamentals | null;
+  fundamentals_as_of: string | null;
+  comps: Comp[];
+};
+
+export type TickerFundamentals = {
+  yf_symbol: string;
+  sector: string | null;
+  industry: string | null;
+  market_cap: number | null;
+  beta: number | null;
+  trailing_pe: number | null;
+  forward_pe: number | null;
+  peg: number | null;
+  ev_ebitda: number | null;
+  earnings_growth: number | null;
+  revenue_growth: number | null;
+  debt_to_equity: number | null;
+  current_ratio: number | null;
+  quick_ratio: number | null;
+  roe: number | null;
+  roa: number | null;
+  gross_margins: number | null;
+  operating_margins: number | null;
+  dividend_yield: number | null;
+};
+
+export type Comp = {
+  ticker: string;
+  sector: string | null;
+  trailing_pe: number | null;
+  forward_pe: number | null;
+  ev_ebitda: number | null;
+  debt_to_equity: number | null;
+  dividend_yield: number | null;
+  is_self: boolean;
 };
 
 export const getTearsheet = (tenantId: string, id: string, ticker: string) =>

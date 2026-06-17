@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from api.db import models
 from api.services import analytics
+from api.services import fundamentals as fundamentals_service
 
 _SPY = "SPY"
 _MIN_RISK_BARS = 60          # ~3 months of daily closes before annualized risk stats mean anything
@@ -68,6 +69,20 @@ class TearsheetTechnical:
 
 
 @dataclass
+class Comp:
+    """One row of the same-sector comparison table (the holding + its sector peers)."""
+
+    ticker: str
+    sector: str | None
+    trailing_pe: float | None
+    forward_pe: float | None
+    ev_ebitda: float | None
+    debt_to_equity: float | None
+    dividend_yield: float | None
+    is_self: bool = False
+
+
+@dataclass
 class Tearsheet:
     ticker: str
     base_currency: str
@@ -75,9 +90,14 @@ class Tearsheet:
     position: TearsheetPosition
     performance: TearsheetPerformance
     technical: TearsheetTechnical
-    # Multiples / balance-sheet / comps blocks are gated on the fundamentals artifact.
+    # Multiples / balance-sheet / comps blocks come from the fundamentals spine artifact
+    # (alpha-engine-config#1022), which is feed-gated (yfinance-derived → Pro). Populated on
+    # a feed-entitled build; honestly N/A otherwise.
     fundamentals_available: bool = False
     fundamentals_reason: str = _FUNDAMENTALS_REASON
+    fundamentals: fundamentals_service.TickerFundamentals | None = None
+    fundamentals_as_of: date | None = None
+    comps: list[Comp] = field(default_factory=list)
 
 
 def _close_series(session: Session, symbol: str) -> list[tuple[date, float]]:
@@ -206,8 +226,31 @@ def _technical(session: Session, ticker: str) -> TearsheetTechnical:
     return tech
 
 
-def tearsheet(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, ticker: str) -> Tearsheet | None:
-    """Assemble the tearsheet for one held ticker, or None if the portfolio doesn't hold it."""
+def _yf_symbol_map(session: Session, symbols: list[str]) -> dict[str, str]:
+    """ticker → yf_symbol (the fundamentals/intraday artifacts are keyed by yf_symbol).
+    Falls back to the bare symbol when no override is set (the US/USD case)."""
+    if not symbols:
+        return {}
+    rows = session.execute(
+        select(models.Security.symbol, models.Security.yf_symbol).where(models.Security.symbol.in_(symbols))
+    ).all()
+    return {sym: (yf or sym) for sym, yf in rows}
+
+
+def tearsheet(
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    ticker: str,
+    *,
+    feed_enabled: bool = False,
+    fundamentals_reader=None,
+) -> Tearsheet | None:
+    """Assemble the tearsheet for one held ticker, or None if the portfolio doesn't hold it.
+
+    ``feed_enabled`` gates the fundamentals blocks (multiples / balance-sheet / comps) —
+    they're yfinance-derived (licensed) so they only populate on a feed-entitled build;
+    otherwise they're honestly N/A. ``fundamentals_reader`` is injectable for tests."""
     base = analytics._base_currency(session, portfolio_id)
     valued = analytics.valued_holdings(session, tenant_id, portfolio_id)
     holding = next((h for h in valued if h.ticker == ticker), None)
@@ -240,11 +283,43 @@ def tearsheet(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID, t
         accounts=sorted(account_names),
     )
     as_of = date.today()
-    return Tearsheet(
+    technical = _technical(session, ticker)
+    sheet = Tearsheet(
         ticker=ticker,
         base_currency=base,
         as_of=as_of,
         position=position,
         performance=_performance(session, ticker, holding.unrealized_pct, as_of),
-        technical=_technical(session, ticker),
+        technical=technical,
     )
+
+    # Fundamentals blocks (multiples / balance-sheet / comps) — feed-gated.
+    if feed_enabled:
+        snap = fundamentals_service.load_fundamentals(reader=fundamentals_reader)
+        yf_map = _yf_symbol_map(session, [h.ticker for h in valued])
+        fund = snap.by_symbol.get(yf_map.get(ticker, ticker))
+        if fund is not None:
+            sheet.fundamentals_available = True
+            sheet.fundamentals = fund
+            sheet.fundamentals_as_of = snap.as_of
+            technical.forward_div_yield = fund.dividend_yield
+            # Same-sector comps across the user's holdings (the target row flagged is_self).
+            if fund.sector:
+                comps: list[Comp] = []
+                for h in valued:
+                    f = snap.by_symbol.get(yf_map.get(h.ticker, h.ticker))
+                    if f is not None and f.sector == fund.sector:
+                        comps.append(
+                            Comp(
+                                ticker=h.ticker,
+                                sector=f.sector,
+                                trailing_pe=f.trailing_pe,
+                                forward_pe=f.forward_pe,
+                                ev_ebitda=f.ev_ebitda,
+                                debt_to_equity=f.debt_to_equity,
+                                dividend_yield=f.dividend_yield,
+                                is_self=(h.ticker == ticker),
+                            )
+                        )
+                sheet.comps = sorted(comps, key=lambda c: (not c.is_self, c.ticker))
+    return sheet

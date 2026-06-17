@@ -1453,6 +1453,43 @@ class TearsheetTechnicalOut(BaseModel):
     forward_div_yield: float | None = None
 
 
+class TickerFundamentalsOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    yf_symbol: str
+    sector: str | None
+    industry: str | None
+    market_cap: float | None
+    beta: float | None
+    trailing_pe: float | None
+    forward_pe: float | None
+    peg: float | None
+    ev_ebitda: float | None
+    earnings_growth: float | None
+    revenue_growth: float | None
+    debt_to_equity: float | None
+    current_ratio: float | None
+    quick_ratio: float | None
+    roe: float | None
+    roa: float | None
+    gross_margins: float | None
+    operating_margins: float | None
+    dividend_yield: float | None
+
+
+class CompOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    ticker: str
+    sector: str | None
+    trailing_pe: float | None
+    forward_pe: float | None
+    ev_ebitda: float | None
+    debt_to_equity: float | None
+    dividend_yield: float | None
+    is_self: bool = False
+
+
 class TearsheetOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -1464,6 +1501,9 @@ class TearsheetOut(BaseModel):
     technical: TearsheetTechnicalOut
     fundamentals_available: bool = False
     fundamentals_reason: str = ""
+    fundamentals: TickerFundamentalsOut | None = None
+    fundamentals_as_of: date | None = None
+    comps: list[CompOut] = []
 
 
 @router.get("/{portfolio_id}/tearsheet/{ticker}", response_model=TearsheetOut)
@@ -1471,12 +1511,16 @@ def get_tearsheet(
     ticker: str,
     portfolio: models.Portfolio = Depends(_owned_portfolio),
     session: Session = Depends(get_session),
+    x_preview_feed: str | None = Header(default=None),
 ) -> tearsheet_service.Tearsheet:
     """IB-style per-holding tearsheet (metron-ops#22): Position + Performance + Technical
-    computed from data Metron already has; the valuation-multiples / balance-sheet / comps
-    blocks are honestly marked N/A until the fundamentals spine artifact ships
-    (alpha-engine-config#1022). 404 if the portfolio doesn't hold the ticker."""
-    sheet = tearsheet_service.tearsheet(session, portfolio.tenant_id, portfolio.id, ticker.upper())
+    from data Metron already has; the valuation-multiples / balance-sheet / comps blocks
+    come from the feed-gated fundamentals spine artifact (yfinance-derived → Pro) and
+    populate only on a feed-entitled build. 404 if the portfolio doesn't hold the ticker."""
+    sheet = tearsheet_service.tearsheet(
+        session, portfolio.tenant_id, portfolio.id, ticker.upper(),
+        feed_enabled=_external_market_data_allowed(x_preview_feed),
+    )
     if sheet is None:
         raise HTTPException(status_code=404, detail=f"{ticker.upper()} is not a current holding.")
     return sheet
