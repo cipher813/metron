@@ -1,18 +1,38 @@
-import { acctParams, getAccounts, getHoldings, getMacro, getPlugins, getPortfolio, getSummary, MetronApiError, type Portfolio, type PluginNav } from "@/lib/api";
+import { acctParams, getAccounts, getMacro, getPlugins, getPortfolio, getSummary, MetronApiError, type Account, type Portfolio, type PluginNav } from "@/lib/api";
 import { moneyWhole, signClass, signedMoneyWhole } from "@/lib/format";
 import { Empty, Section, StatCard } from "@/components/ui";
 import { AccountPanel } from "@/components/account-panel";
 import { PortfolioNav } from "@/components/portfolio-nav";
 import { TierSimulator } from "@/components/tier-simulator";
-import { GroupedHoldings } from "@/components/grouped-holdings";
 import { MacroStrip } from "@/components/macro-strip";
-import { RefreshPrices } from "@/components/refresh-prices";
 import { RenamePortfolio } from "@/components/rename-portfolio";
 import { loadEntitlements, toFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
 import { resolveAccountIds } from "@/lib/selection";
+import Link from "next/link";
 
 export const dynamic = "force-dynamic";
+
+/** Taxable per the 3-way treatment, falling back to the derived binary flag. */
+function isTaxable(a: Account): boolean {
+  if (a.tax_treatment === "taxable") return true;
+  if (a.tax_treatment === "tax_deferred" || a.tax_treatment === "tax_exempt") return false;
+  return a.taxable;
+}
+
+/** Sum a field over accounts, returning null only when no account carries it. */
+function sumOrNull(accts: Account[], pick: (a: Account) => number | null): number | null {
+  let total = 0;
+  let any = false;
+  for (const a of accts) {
+    const v = pick(a);
+    if (v != null) {
+      total += v;
+      any = true;
+    }
+  }
+  return any ? total : null;
+}
 
 export default async function PortfolioPage({
   params,
@@ -24,19 +44,18 @@ export default async function PortfolioPage({
   const { id } = params;
   const tenantId = await requireTenantId();
 
-  // The account-panel selection (repeatable ?account_id=); empty = whole portfolio.
-  // URL selection wins; with none, the saved panel selection is applied (redirect).
+  // The account selection (repeatable ?account_id=); empty = whole portfolio. URL wins;
+  // with none, the saved panel selection is applied (redirect). Activation is managed on
+  // the Holdings page (metron-ops#64) — here the Overview metrics follow that selection.
   const accountIds = await resolveAccountIds(tenantId, id, `/portfolios/${id}`, searchParams.account_id);
   const scoped = accountIds.length > 0;
-  // Carry the selection onto the cross-page nav links so it persists.
   const navQuery = acctParams(accountIds);
 
-  let portfolio: Portfolio, summary, holdings, accounts;
+  let portfolio: Portfolio, summary, accounts;
   try {
-    [portfolio, summary, holdings, accounts] = await Promise.all([
+    [portfolio, summary, accounts] = await Promise.all([
       getPortfolio(tenantId, id),
       getSummary(tenantId, id, accountIds),
-      getHoldings(tenantId, id, accountIds),
       getAccounts(tenantId, id),
     ]);
   } catch (e) {
@@ -49,8 +68,15 @@ export default async function PortfolioPage({
   const ccy = summary.base_currency;
   const priced = summary.market_value != null;
 
-  // Premium nav (metron-ops). Best-effort + always empty on the public tier — a
-  // failure here must never break the core portfolio view.
+  // Unrealized split by tax treatment (metron-ops#64): never sum unrealized across
+  // treatments — gains in an IRA/401(k)/Roth are never taxed, so the taxable figure is the
+  // only one with a tax consequence. Compute over the ACTIVE selection (what the metrics
+  // reflect); empty selection = whole portfolio.
+  const activeAccts = scoped ? accounts.filter((a) => accountIds.includes(a.account_id)) : accounts;
+  const taxableUnreal = sumOrNull(activeAccts.filter(isTaxable), (a) => a.unrealized_gain);
+  const advUnreal = sumOrNull(activeAccts.filter((a) => !isTaxable(a)), (a) => a.unrealized_gain);
+
+  // Premium nav (metron-ops). Best-effort + always empty on the public tier.
   let plugins: PluginNav[] = [];
   try {
     plugins = await getPlugins(tenantId);
@@ -58,13 +84,9 @@ export default async function PortfolioPage({
     plugins = [];
   }
 
-  // Macro snapshot for the overview (FRED, public-domain → beta-safe). Best-effort: a
-  // failure must never break the core view (metron-ops#49).
+  // Macro snapshot (FRED, public-domain → beta-safe). Best-effort (metron-ops#49).
   const macro = await getMacro(tenantId).catch(() => null);
 
-  // Product-tier entitlements (drives the nav lock state + the owner-only tier
-  // simulator). The preview cookies are honored server-side ONLY when the
-  // simulator is enabled; on the public product they're ignored. Best-effort.
   const entitlements = await loadEntitlements(tenantId);
   const featureStates = toFeatureStates(entitlements);
 
@@ -77,38 +99,65 @@ export default async function PortfolioPage({
         <RenamePortfolio portfolioId={id} name={portfolio.name} />
       </div>
 
+      {/* Macro at the top of the dashboard (metron-ops#64). */}
+      {macro ? <MacroStrip macro={macro} /> : null}
+
+      {/* Headline: total value, with unrealized broken out by tax treatment. */}
+      {priced ? (
+        <div className="mt-6 rounded-lg border border-line p-5">
+          <div className="text-xs uppercase tracking-wide text-muted">Total value</div>
+          <div className="mt-1 text-3xl font-semibold tabular-nums">{moneyWhole(summary.market_value as number, ccy)}</div>
+          <div className="mt-1 text-xs text-muted">cost basis {moneyWhole(summary.total_cost_basis, ccy)}</div>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <Link href={`/portfolios/${id}/tax${navQuery}`} className="rounded-md border border-line p-3 transition hover:border-muted hover:bg-white/5">
+              <div className="text-xs uppercase tracking-wide text-muted">Taxable unrealized →</div>
+              <div className={`mt-1 text-xl font-semibold tabular-nums ${signClass(taxableUnreal ?? 0)}`}>
+                {taxableUnreal != null ? signedMoneyWhole(taxableUnreal, ccy) : "—"}
+              </div>
+              <div className="mt-1 text-xs text-muted">the only unrealized with a tax consequence</div>
+            </Link>
+            <div className="rounded-md border border-line/60 p-3">
+              <div className="text-xs uppercase tracking-wide text-muted/70">Tax-advantaged unrealized</div>
+              <div className="mt-1 text-xl font-semibold tabular-nums text-muted">
+                {advUnreal != null ? signedMoneyWhole(advUnreal, ccy) : "—"}
+              </div>
+              <div className="mt-1 text-xs text-muted/70">IRA / 401(k) / Roth — never taxed</div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-6">
+          <StatCard label="Cost basis" value={moneyWhole(summary.total_cost_basis, ccy)} hint={`${summary.n_holdings} holdings`} href={`/portfolios/${id}/holdings${navQuery}`} />
+        </div>
+      )}
+
+      {/* Consolidated metric tiles — each links into its source (metron-ops#64). */}
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {priced ? (
-          <>
-            <StatCard
-              label="Market value"
-              value={moneyWhole(summary.market_value as number, ccy)}
-              hint={`cost ${moneyWhole(summary.total_cost_basis, ccy)}`}
-            />
-            <StatCard
-              label="Unrealized"
-              value={signedMoneyWhole(summary.unrealized_gain as number, ccy)}
-              valueClass={signClass(summary.unrealized_gain as number)}
-              hint="vs cost basis"
-            />
-          </>
-        ) : (
-          <StatCard label="Cost basis" value={moneyWhole(summary.total_cost_basis, ccy)} hint={`${summary.n_holdings} holdings`} />
-        )}
         <StatCard
           label="Realized gains"
           value={signedMoneyWhole(summary.realized_total, ccy)}
           valueClass={signClass(summary.realized_total)}
           hint="short + long term"
-          href={`/portfolios/${id}/tax`}
+          href={`/portfolios/${id}/tax${navQuery}`}
         />
         <StatCard
           label="Income"
           value={moneyWhole(summary.dividends + summary.interest, ccy)}
           hint="dividends + interest"
-          href={`/portfolios/${id}/tax`}
+          href={`/portfolios/${id}/tax${navQuery}`}
         />
-        <StatCard label="Accounts" value={String(summary.n_accounts)} />
+        <StatCard
+          label="Holdings"
+          value={String(summary.n_holdings)}
+          hint="open positions"
+          href={`/portfolios/${id}/holdings${navQuery}`}
+        />
+        <StatCard
+          label="Accounts"
+          value={String(summary.n_accounts)}
+          hint="manage / activate"
+          href={`/portfolios/${id}/holdings${navQuery}`}
+        />
       </div>
 
       {summary.n_unconverted > 0 ? (
@@ -118,28 +167,15 @@ export default async function PortfolioPage({
         </p>
       ) : null}
 
-      <Section title="Accounts">
-        <AccountPanel accounts={accounts} baseCurrency={ccy} portfolioId={id} />
-        {scoped ? (
-          <p className="mt-2 text-xs text-muted">
-            Showing {summary.n_accounts} of {accounts.length} account{accounts.length === 1 ? "" : "s"} — totals,
-            holdings, income, Risk and Attribution below reflect this selection. (Performance stays whole-portfolio.)
-          </p>
-        ) : null}
+      {/* Accounts summary (read-only) — activation lives on the Holdings page. */}
+      <Section title="Accounts" note={scoped ? `${summary.n_accounts} of ${accounts.length} active` : undefined}>
+        <AccountPanel accounts={accounts} baseCurrency={ccy} portfolioId={id} readOnly />
+        <p className="mt-2 text-xs text-muted">
+          <Link href={`/portfolios/${id}/holdings${navQuery}`} className="text-accent hover:underline">
+            Manage &amp; activate accounts on the Holdings page →
+          </Link>
+        </p>
       </Section>
-
-      <Section title="Holdings" note={priced ? `all values in ${ccy} · market value from last EOD close` : "cost basis — refresh for market value"}>
-        <div className="mb-3">
-          <RefreshPrices portfolioId={id} feedOn={entitlements?.feed_enabled} />
-        </div>
-        {holdings.length === 0 ? (
-          <Empty>No open positions.</Empty>
-        ) : (
-          <GroupedHoldings holdings={holdings} baseCurrency={ccy} priced={priced} portfolioId={id} />
-        )}
-      </Section>
-
-      {macro ? <MacroStrip macro={macro} portfolioId={id} /> : null}
     </div>
   );
 }
