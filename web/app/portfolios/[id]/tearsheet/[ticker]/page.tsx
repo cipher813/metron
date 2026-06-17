@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { getTearsheet, MetronApiError } from "@/lib/api";
 import { isoDate, money, moneyWhole, percent, quantity, signClass, signedMoneyWhole } from "@/lib/format";
-import { Empty, Section, StatCard } from "@/components/ui";
+import { Empty, Section, StatCard, Table } from "@/components/ui";
 import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -91,19 +91,72 @@ export default async function TearsheetPage({ params }: { params: { id: string; 
         </div>
       </Section>
 
-      {/* 3–5 — Fundamentals-gated blocks: honest N/A until the spine artifact ships. */}
-      <Section title="Valuation, balance sheet & comps">
-        <div className="rounded-lg border border-dashed border-line p-6 text-sm text-muted">
-          {sheet.fundamentals_available ? (
-            "Fundamentals available."
-          ) : (
+      {/* 3–5 — Fundamentals blocks (feed-gated). */}
+      {sheet.fundamentals_available && sheet.fundamentals ? (
+        (() => {
+          const f = sheet.fundamentals!;
+          const r2 = (v: number | null) => (v != null ? v.toFixed(2) : "—");
+          const de = (v: number | null) => (v != null ? (v / 100).toFixed(2) : "—"); // yfinance D/E is a %
+          const cap = (v: number | null) =>
+            v == null ? "—" : v >= 1e12 ? `${(v / 1e12).toFixed(1)}T` : v >= 1e9 ? `${(v / 1e9).toFixed(1)}B` : `${(v / 1e6).toFixed(0)}M`;
+          return (
             <>
-              Multiples (P/E, PEG, EV/EBITDA), balance-sheet ratios (D/E, current/quick, ROE/ROA, margins) and the
-              same-sector comps table aren&apos;t available yet. {sheet.fundamentals_reason}
+              <Section title="Valuation multiples" note={[f.sector, f.industry].filter(Boolean).join(" · ") || undefined}>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <StatCard label="Trailing P/E" value={r2(f.trailing_pe)} />
+                  <StatCard label="Forward P/E" value={r2(f.forward_pe)} />
+                  <StatCard label="PEG" value={r2(f.peg)} />
+                  <StatCard label="EV / EBITDA" value={r2(f.ev_ebitda)} />
+                  <StatCard label="Earnings growth" value={f.earnings_growth != null ? percent(f.earnings_growth) : "—"} valueClass={signClass(f.earnings_growth ?? 0)} />
+                  <StatCard label="Revenue growth" value={f.revenue_growth != null ? percent(f.revenue_growth) : "—"} valueClass={signClass(f.revenue_growth ?? 0)} />
+                  <StatCard label="Market cap" value={cap(f.market_cap)} />
+                  <StatCard label="Beta" value={r2(f.beta)} />
+                </div>
+              </Section>
+
+              <Section title="Balance sheet & profitability">
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  <StatCard label="Debt / equity" value={de(f.debt_to_equity)} />
+                  <StatCard label="Current ratio" value={r2(f.current_ratio)} />
+                  <StatCard label="Quick ratio" value={r2(f.quick_ratio)} />
+                  <StatCard label="Dividend yield" value={f.dividend_yield != null ? percent(f.dividend_yield) : "—"} />
+                  <StatCard label="ROE" value={f.roe != null ? percent(f.roe) : "—"} valueClass={signClass(f.roe ?? 0)} />
+                  <StatCard label="ROA" value={f.roa != null ? percent(f.roa) : "—"} valueClass={signClass(f.roa ?? 0)} />
+                  <StatCard label="Gross margin" value={f.gross_margins != null ? percent(f.gross_margins) : "—"} />
+                  <StatCard label="Operating margin" value={f.operating_margins != null ? percent(f.operating_margins) : "—"} />
+                </div>
+              </Section>
+
+              {sheet.comps.length > 1 ? (
+                <Section title="Comps" note={`same sector (${f.sector}) across your holdings`}>
+                  <Table head={["Ticker", "P/E", "Fwd P/E", "EV/EBITDA", "D/E", "Div yield"]}>
+                    {sheet.comps.map((c) => (
+                      <tr key={c.ticker} className={`border-b border-line last:border-0 ${c.is_self ? "bg-white/5 font-medium" : ""}`}>
+                        <td className="px-4 py-2">{c.ticker}{c.is_self ? " ·" : ""}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{r2(c.trailing_pe)}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{r2(c.forward_pe)}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{r2(c.ev_ebitda)}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{de(c.debt_to_equity)}</td>
+                        <td className="px-4 py-2 text-right tabular-nums">{c.dividend_yield != null ? percent(c.dividend_yield) : "—"}</td>
+                      </tr>
+                    ))}
+                  </Table>
+                </Section>
+              ) : null}
+              {sheet.fundamentals_as_of ? (
+                <p className="mt-2 text-xs text-muted">Fundamentals as of {isoDate(sheet.fundamentals_as_of)} · data-spine.</p>
+              ) : null}
             </>
-          )}
-        </div>
-      </Section>
+          );
+        })()
+      ) : (
+        <Section title="Valuation, balance sheet & comps">
+          <div className="rounded-lg border border-dashed border-line p-6 text-sm text-muted">
+            Multiples (P/E, PEG, EV/EBITDA), balance-sheet ratios (D/E, current/quick, ROE/ROA, margins) and the
+            same-sector comps table arrive with the Pro market-data feed. {sheet.fundamentals_reason}
+          </div>
+        </Section>
+      )}
     </div>
   );
 }
