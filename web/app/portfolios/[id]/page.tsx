@@ -1,12 +1,13 @@
-import { acctParams, getAccounts, getMacro, getPlugins, getPortfolio, getSummary, MetronApiError, type Account, type Portfolio, type PluginNav } from "@/lib/api";
+import { acctParams, getAccounts, getIndices, getMacro, getPlugins, getPortfolio, getSummary, MetronApiError, type Account, type Portfolio, type PluginNav } from "@/lib/api";
 import { moneyWhole, signClass, signedMoneyWhole } from "@/lib/format";
 import { Empty, Section, StatCard } from "@/components/ui";
 import { AccountPanel } from "@/components/account-panel";
 import { PortfolioNav } from "@/components/portfolio-nav";
 import { TierSimulator } from "@/components/tier-simulator";
 import { MacroStrip } from "@/components/macro-strip";
+import { IndexStrip } from "@/components/index-strip";
 import { RenamePortfolio } from "@/components/rename-portfolio";
-import { loadEntitlements, toFeatureStates } from "@/lib/entitlements";
+import { featureEntitlement, loadEntitlements, previewFromCookies, toFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
 import { resolveAccountIds } from "@/lib/selection";
 import Link from "next/link";
@@ -90,6 +91,14 @@ export default async function PortfolioPage({
   const entitlements = await loadEntitlements(tenantId);
   const featureStates = toFeatureStates(entitlements);
 
+  // Markets strip: intraday major-index proxies (feed-gated → Pro). Fetched server-side
+  // for first paint ONLY when entitled (hidden in the no-feed beta, per metron-ops#53);
+  // the client component then polls every ~5 min. Best-effort — never blocks the page.
+  const indicesEnt = featureEntitlement(entitlements, "indices");
+  const indices = indicesEnt?.available
+    ? await getIndices(tenantId, previewFromCookies()).catch(() => null)
+    : null;
+
   return (
     <div>
       <PortfolioNav portfolioId={id} name={portfolio.name} navQuery={navQuery} plugins={plugins} featureStates={featureStates} />
@@ -99,7 +108,9 @@ export default async function PortfolioPage({
         <RenamePortfolio portfolioId={id} name={portfolio.name} />
       </div>
 
-      {/* Macro at the top of the dashboard (metron-ops#64). */}
+      {/* Markets (intraday index proxies) + Macro at the top of the dashboard. The
+          markets strip is feed-gated (Pro) — hidden in the no-feed beta (metron-ops#53). */}
+      {indices?.available ? <IndexStrip initial={indices} /> : null}
       {macro ? <MacroStrip macro={macro} /> : null}
 
       {/* Headline: total value, with unrealized broken out by tax treatment. */}

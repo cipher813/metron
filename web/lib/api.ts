@@ -923,6 +923,46 @@ export const getEntitlements = (
   return get<Entitlements>(tenantId, `/meta/entitlements${qs ? `?${qs}` : ""}`);
 };
 
+// ── Market indices (intraday) — the Overview "markets" strip ────────────────
+export type IndexQuote = {
+  symbol: string;
+  label: string;
+  last: number | null;
+  prev_close: number | null;
+  open: number | null;
+  change: number | null;
+  change_pct: number | null;
+  session_date: string | null;
+  suspect: boolean;
+};
+
+/** SPY/QQQ/IWM intraday proxies for the S&P 500 / Nasdaq 100 / Russell 2000.
+ *  Feed-gated (Pro): `available=false` + `required_tier` when locked in the no-feed
+ *  beta; `available=false` with no `required_tier` when entitled but no data yet. */
+export type Indices = {
+  available: boolean;
+  reason: string | null;
+  required_tier: string | null;
+  as_of_utc: string | null;
+  stale: boolean;
+  indices: IndexQuote[];
+};
+
+/** Latest intraday index levels. `preview` is forwarded as X-Preview-* headers and is
+ *  honored server-side ONLY when the tier simulator is on (owner-only) — mirrors the
+ *  feed-dependent compute endpoints. */
+export async function getIndices(
+  tenantId: string,
+  preview?: { tier?: string; feed?: boolean },
+): Promise<Indices> {
+  const headers: Record<string, string> = { "X-Tenant-Id": tenantId };
+  if (preview?.tier) headers["X-Preview-Tier"] = preview.tier;
+  if (preview?.feed !== undefined) headers["X-Preview-Feed"] = String(preview.feed);
+  const res = await fetch(`${API_URL}/indices/intraday`, { headers, cache: "no-store" });
+  if (!res.ok) throw new MetronApiError(res.status, `GET /indices/intraday → ${res.status}`);
+  return res.json() as Promise<Indices>;
+}
+
 export type AdvisorSectorWeight = { sector: string; weight_pct: number; flag: string };
 export type AdvisorConcentration = { ticker: string; weight_pct: number; limit_pct: number };
 export type AdvisorGeo = {
