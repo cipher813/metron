@@ -1,5 +1,5 @@
 import { acctParams, getAccounts, getIndices, getMacro, getPlugins, getPortfolio, getSummary, MetronApiError, type Account, type Portfolio, type PluginNav } from "@/lib/api";
-import { moneyWhole, signClass, signedMoneyWhole } from "@/lib/format";
+import { accountingMoneyWhole, moneyWhole, signClass } from "@/lib/format";
 import { Empty, Section, StatCard } from "@/components/ui";
 import { AccountPanel } from "@/components/account-panel";
 import { PortfolioNav } from "@/components/portfolio-nav";
@@ -123,14 +123,14 @@ export default async function PortfolioPage({
             <Link href={`/portfolios/${id}/tax${navQuery}`} className="rounded-md border border-line p-3 transition hover:border-muted hover:bg-white/5">
               <div className="text-xs uppercase tracking-wide text-muted">Taxable unrealized →</div>
               <div className={`mt-1 text-xl font-semibold tabular-nums ${signClass(taxableUnreal ?? 0)}`}>
-                {taxableUnreal != null ? signedMoneyWhole(taxableUnreal, ccy) : "—"}
+                {taxableUnreal != null ? accountingMoneyWhole(taxableUnreal, ccy) : "—"}
               </div>
               <div className="mt-1 text-xs text-muted">the only unrealized with a tax consequence</div>
             </Link>
             <div className="rounded-md border border-line/60 p-3">
               <div className="text-xs uppercase tracking-wide text-muted/70">Tax-advantaged unrealized</div>
               <div className="mt-1 text-xl font-semibold tabular-nums text-muted">
-                {advUnreal != null ? signedMoneyWhole(advUnreal, ccy) : "—"}
+                {advUnreal != null ? accountingMoneyWhole(advUnreal, ccy) : "—"}
               </div>
               <div className="mt-1 text-xs text-muted/70">IRA / 401(k) / Roth — never taxed</div>
             </div>
@@ -146,7 +146,7 @@ export default async function PortfolioPage({
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard
           label="Realized gains"
-          value={signedMoneyWhole(summary.realized_total, ccy)}
+          value={accountingMoneyWhole(summary.realized_total, ccy)}
           valueClass={signClass(summary.realized_total)}
           hint="short + long term"
           href={`/portfolios/${id}/tax${navQuery}`}

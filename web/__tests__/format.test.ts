@@ -1,7 +1,16 @@
 // Display formatting — the money/sign conventions every table renders through.
 
 import { describe, expect, it } from "vitest";
-import { money, moneyWhole, percent, signClass, signedMoney, signedMoneyWhole } from "@/lib/format";
+import {
+  accountingMoneyWhole,
+  accountingPercent,
+  money,
+  moneyWhole,
+  percent,
+  signClass,
+  signedMoney,
+  signedMoneyWhole,
+} from "@/lib/format";
 
 describe("format", () => {
   it("money renders currency to the cent", () => {
@@ -36,5 +45,17 @@ describe("format", () => {
 
   it("percent renders a ratio as a percentage", () => {
     expect(percent(0.1234)).toMatch(/12\.3/);
+  });
+
+  it("accountingMoneyWhole drops the + and parenthesizes losses", () => {
+    expect(accountingMoneyWhole(200.4)).toBe("$200"); // no leading +
+    expect(accountingMoneyWhole(-200.6)).toBe("($201)"); // loss in parentheses, rounded
+    expect(accountingMoneyWhole(0)).toBe("$0");
+  });
+
+  it("accountingPercent drops the + and parenthesizes losses", () => {
+    expect(accountingPercent(0.1234)).toBe("12.3%");
+    expect(accountingPercent(-0.05)).toBe("(5.0%)");
+    expect(accountingPercent(0)).toBe("0.0%");
   });
 });

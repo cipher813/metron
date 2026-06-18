@@ -36,6 +36,21 @@ export function signedMoneyWhole(value: number, currency = "USD"): string {
   return formatted;
 }
 
+/** Accounting-style whole-dollar money: positive carries NO leading "+", losses are in
+ *  parentheses (1,234 / (1,234)). Sign is read from color (signClass) + the parens, not a
+ *  leading sign (metron-ops#80). */
+export function accountingMoneyWhole(value: number, currency = "USD"): string {
+  const formatted = moneyWhole(Math.abs(value), currency);
+  return value < 0 ? `(${formatted})` : formatted;
+}
+
+/** Accounting-style percentage from a decimal ratio: no leading "+", losses in
+ *  parentheses (0.05 → "5.0%", -0.05 → "(5.0%)"). (metron-ops#80) */
+export function accountingPercent(ratio: number): string {
+  const pct = Math.abs(ratio * 100).toFixed(1);
+  return ratio < 0 ? `(${pct}%)` : `${pct}%`;
+}
+
 export function quantity(value: number): string {
   return new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 }).format(value);
 }

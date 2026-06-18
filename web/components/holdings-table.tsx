@@ -10,7 +10,7 @@ import { useMemo, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Holding } from "@/lib/api";
-import { fxRate, money, moneyWhole, percent, quantity, signClass, signedMoneyWhole } from "@/lib/format";
+import { accountingMoneyWhole, accountingPercent, fxRate, money, moneyWhole, quantity, signClass } from "@/lib/format";
 import { setSecurityLabelAction } from "@/app/portfolios/[id]/actions";
 
 type SortValue = string | number | null;
@@ -179,10 +179,10 @@ export function HoldingsTable({
                       {baseMoney(h.market_value, h.market_value_local, moneyWhole)}
                     </td>
                     <td className={`px-4 py-2 text-right tabular-nums ${signClass(h.unrealized_gain ?? 0)}`}>
-                      {h.unrealized_gain != null ? signedMoneyWhole(h.unrealized_gain, baseCurrency) : "—"}
+                      {h.unrealized_gain != null ? accountingMoneyWhole(h.unrealized_gain, baseCurrency) : "—"}
                     </td>
                     <td className={`px-4 py-2 text-right tabular-nums ${signClass(h.unrealized_pct ?? 0)}`}>
-                      {h.unrealized_pct != null ? percent(h.unrealized_pct) : "—"}
+                      {h.unrealized_pct != null ? accountingPercent(h.unrealized_pct) : "—"}
                     </td>
                   </>
                 ) : null}
@@ -205,10 +205,10 @@ export function HoldingsTable({
                   <td className="px-4 py-2" />
                   <td className="px-4 py-2 text-right tabular-nums">{moneyWhole(totals.mv, baseCurrency)}</td>
                   <td className={`px-4 py-2 text-right tabular-nums ${signClass(totals.unreal)}`}>
-                    {signedMoneyWhole(totals.unreal, baseCurrency)}
+                    {accountingMoneyWhole(totals.unreal, baseCurrency)}
                   </td>
                   <td className={`px-4 py-2 text-right tabular-nums ${signClass(totals.unrealPct ?? 0)}`}>
-                    {totals.unrealPct != null ? percent(totals.unrealPct) : "—"}
+                    {totals.unrealPct != null ? accountingPercent(totals.unrealPct) : "—"}
                   </td>
                 </>
               ) : null}

@@ -9,7 +9,7 @@
 
 import { HoldingsTable } from "@/components/holdings-table";
 import type { Holding } from "@/lib/api";
-import { moneyWhole, percent, signClass, signedMoneyWhole } from "@/lib/format";
+import { accountingMoneyWhole, accountingPercent, moneyWhole, signClass } from "@/lib/format";
 
 // Display order + labels for the security types classify_security_type emits.
 const TYPE_LABELS: [string, string][] = [
@@ -114,8 +114,8 @@ export function GroupedHoldings({
               </span>
               <span className={grand.unreal != null ? signClass(grand.unreal) : "text-muted"}>
                 <span className="text-[10px] uppercase tracking-wide text-muted">Unrealized </span>
-                {grand.unreal != null ? signedMoneyWhole(grand.unreal, baseCurrency) : "—"}
-                {grandPct != null ? <span className="ml-1 text-xs">({percent(grandPct)})</span> : null}
+                {grand.unreal != null ? accountingMoneyWhole(grand.unreal, baseCurrency) : "—"}
+                {grandPct != null ? <span className="ml-1 text-xs">{accountingPercent(grandPct)}</span> : null}
               </span>
             </>
           ) : null}
