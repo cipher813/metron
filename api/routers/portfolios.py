@@ -970,7 +970,13 @@ def import_flex(
     (no per-tenant credential at rest), and the raw statement is not cached to local
     disk (``persist_bronze=False``). A Flex/network failure returns 502.
     """
-    connector = IbkrFlexConnector(body.token, body.query_id, persist_bronze=False)
+    return _run_flex_import(session, portfolio, body.token, body.query_id)
+
+
+def _run_flex_import(session: Session, portfolio: models.Portfolio, token: str, query_id: str) -> ImportOut:
+    """Fetch + persist one IBKR Flex statement — the shared body of the BYO-token import
+    and the stored-credential sync. 502 on a Flex/network failure (always with a reason)."""
+    connector = IbkrFlexConnector(token, query_id, persist_bronze=False)
     snapshot = connector.sync()
     if snapshot.error:
         raise HTTPException(status_code=502, detail=f"IBKR Flex fetch failed: {snapshot.error}")
@@ -978,6 +984,20 @@ def import_flex(
         session, tenant_id=portfolio.tenant_id, portfolio_id=portfolio.id, snapshot=snapshot
     )
     return _summarize(snapshot, persisted, parsed=len(snapshot.activities), skipped=0, errors=[])
+
+
+@router.post("/{portfolio_id}/sync/flex", response_model=ImportOut)
+def sync_flex(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    session: Session = Depends(get_session),
+) -> ImportOut:
+    """Sync IBKR Flex from the deployment's STORED token + query id (metron-ops#82) — the
+    one-click counterpart to ``/import/flex`` (no paste). Mirrors the server-side SnapTrade
+    sync: single-operator owner build only. 404 when no stored Flex credentials are
+    configured (the UI then shows the BYO-token form instead)."""
+    if not (settings.flex_token and settings.flex_query_id):
+        raise HTTPException(status_code=404, detail="No stored IBKR Flex credentials on this deployment.")
+    return _run_flex_import(session, portfolio, settings.flex_token, settings.flex_query_id)
 
 
 def _snaptrade_reader_or_error() -> SnapTradeReader:

@@ -25,6 +25,7 @@ import {
   setSnapTradeConnectionExcluded,
   type SnapTradeConnections,
   syncFlex,
+  syncFlexStored,
   syncSnapTrade,
   updateAccountTags,
   updatePortfolio,
@@ -253,6 +254,17 @@ export async function syncFlexAction(portfolioId: string, formData: FormData): P
   try {
     const tenantId = await requireTenantId();
     const result = await syncFlex(tenantId, portfolioId, token, queryId);
+    revalidatePath(`/portfolios/${portfolioId}`);
+    return { ok: true, message: summarize(result), result };
+  } catch (e) {
+    return { ok: false, message: errorMessage(e) };
+  }
+}
+
+export async function syncFlexStoredAction(portfolioId: string): Promise<ActionResult> {
+  try {
+    const tenantId = await requireTenantId();
+    const result = await syncFlexStored(tenantId, portfolioId);
     revalidatePath(`/portfolios/${portfolioId}`);
     return { ok: true, message: summarize(result), result };
   } catch (e) {

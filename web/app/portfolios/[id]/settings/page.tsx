@@ -1,4 +1,4 @@
-import { getAccounts, getExcludedAccounts, getPortfolio, getPreferences, MetronApiError, type ExcludedAccount, type Preferences } from "@/lib/api";
+import { getAccounts, getExcludedAccounts, getMeta, getPortfolio, getPreferences, MetronApiError, type ExcludedAccount, type Preferences } from "@/lib/api";
 import { Empty, Section, Table } from "@/components/ui";
 import { AccountTagRow, BaseCurrencyForm, ExcludedAccountRow, PreferencesForm } from "@/components/settings-forms";
 import { navFeatureStates } from "@/lib/entitlements";
@@ -29,6 +29,12 @@ export default async function SettingsPage({ params }: { params: { id: string } 
     return <Empty>Couldn&apos;t load settings. Is the backend running?</Empty>;
   }
 
+  // Connector capabilities (stored IBKR Flex creds → one-click "Sync IBKR"). Best-effort:
+  // a meta failure just falls back to the BYO-token form (metron-ops#82).
+  const flexStored = await getMeta(tenantId)
+    .then((m) => m.connectors.flex_stored)
+    .catch(() => false);
+
   return (
     <div>
       <PortfolioNav portfolioId={id} navQuery="" featureStates={featureStates} />
@@ -39,7 +45,7 @@ export default async function SettingsPage({ params }: { params: { id: string } 
       </p>
 
       <Section title="Imports & connections" note="CSV / OFX / IBKR Flex / SnapTrade">
-        <ImportPanel portfolioId={id} />
+        <ImportPanel portfolioId={id} flexStored={flexStored} />
       </Section>
 
       <Section title="Base currency" note="reporting currency for all totals">
