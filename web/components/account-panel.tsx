@@ -23,7 +23,7 @@ import {
   updateAccountTagsAction,
 } from "@/app/portfolios/[id]/actions";
 import type { Account } from "@/lib/api";
-import { moneyWhole, percent, signClass, signedMoneyWhole } from "@/lib/format";
+import { accountingMoneyWhole, accountingPercent, moneyWhole, signClass } from "@/lib/format";
 
 /** Human label for the 3-way tax treatment, falling back to the derived taxable flag. */
 function typeLabel(a: Account): string {
@@ -84,23 +84,26 @@ function subtotal(accts: Account[]): Subtotal {
 // vertically across account rows, subtotals and the grand total (metron-ops#54 —
 // auto-width columns sized per-row shifted larger-magnitude accounts out of alignment).
 const COL_COST = "w-24";
-const COL_UNREAL = "w-32";
+const COL_UNREAL = "w-28"; // Unrealized $
+const COL_UNREAL_PCT = "w-20"; // Unrealized %
 const COL_MARKET = "w-24";
 
-/** A single column-header row for the metric columns — replaces the per-row Cost /
- *  Unrealized / Market labels with one header at the top of the panel (metron-ops). */
+/** A single column-header row for the metric columns — replaces the per-row labels with
+ *  one header. Unrealized is split into $ and % columns (metron-ops#80). */
 function MetricHeader() {
   return (
     <div className="flex shrink-0 gap-x-6 text-right text-[10px] uppercase tracking-wide text-muted">
       <div className={COL_COST}>Cost</div>
-      <div className={COL_UNREAL}>Unrealized</div>
+      <div className={COL_UNREAL}>Unrealized $</div>
+      <div className={COL_UNREAL_PCT}>Unrealized %</div>
       <div className={COL_MARKET}>Market</div>
     </div>
   );
 }
 
-/** The 3-column money readout, shared by account rows and subtotal/total rows. Labels
- *  live once in <MetricHeader> at the top, not per row. */
+/** The money readout, shared by account rows and subtotal/total rows. Labels live once in
+ *  <MetricHeader>. Unrealized $ and % are separate columns; gains/losses read from color
+ *  + parentheses (no leading "+"/"−") — accounting style (metron-ops#80). */
 function MetricCells({
   cost,
   unreal,
@@ -115,21 +118,16 @@ function MetricCells({
   muted?: boolean;
 }) {
   const pct = unreal != null && cost ? unreal / cost : null;
+  const unrealClass = unreal != null ? signClass(unreal) : "text-muted";
   return (
     <div className="flex shrink-0 gap-x-6 text-right text-sm tabular-nums">
       <div className={`${COL_COST} ${muted ? "text-muted" : ""}`}>
         {cost != null ? moneyWhole(cost, baseCurrency) : "—"}
       </div>
-      <div className={`${COL_UNREAL} ${unreal != null ? signClass(unreal) : "text-muted"}`}>
-        {unreal != null ? (
-          <>
-            {signedMoneyWhole(unreal, baseCurrency)}
-            {pct != null ? <span className="ml-1 text-xs">({percent(pct)})</span> : null}
-          </>
-        ) : (
-          "—"
-        )}
+      <div className={`${COL_UNREAL} ${unrealClass}`}>
+        {unreal != null ? accountingMoneyWhole(unreal, baseCurrency) : "—"}
       </div>
+      <div className={`${COL_UNREAL_PCT} ${unrealClass}`}>{pct != null ? accountingPercent(pct) : "—"}</div>
       <div className={`${COL_MARKET} ${muted ? "text-muted" : ""}`}>
         {mv != null ? moneyWhole(mv, baseCurrency) : "—"}
       </div>

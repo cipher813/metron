@@ -65,9 +65,12 @@ export function PortfolioNav({
     { label: "Performance", href: `${base}/performance${navQuery}`, feature: "performance" },
     { label: "Risk", href: `${base}/risk${navQuery}`, feature: "risk" },
     { label: "Attribution", href: `${base}/attribution${navQuery}`, feature: "attribution" },
-    // Tax now bundles the realized lots + transaction ledger (metron-ops#66); Macro moved
-    // to the top of the Overview dashboard (#64) — both former standalone pages redirect.
+    // Tax now bundles the realized lots + transaction ledger (metron-ops#66).
     { label: "Tax", href: `${base}/tax${navQuery}`, feature: "tax" },
+    // Macro detail page (1-yr charts + table); also reached from the Overview macro tiles.
+    // FRED public-domain → in the beta tier, so it's a normal (ungated) nav entry, not under
+    // the "Pages" fallback (metron-ops#49).
+    { label: "Macro", href: `${base}/macro`, feature: "macro" },
     { label: "Calendar", href: `${base}/calendar`, feature: "calendar" },
     { label: "Watchlist", href: `${base}/watchlist` },
     ...plugins.map((p) => ({ label: p.label, href: `${base}/${p.href}` })),
