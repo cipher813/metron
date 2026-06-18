@@ -1,13 +1,24 @@
-import { getMacro } from "@/lib/api";
-import { Empty } from "@/components/ui";
+import { getMacro, type MacroIndicator } from "@/lib/api";
+import { Empty, Section, Table } from "@/components/ui";
 import { PortfolioNav } from "@/components/portfolio-nav";
 import { MacroChart } from "@/components/macro-chart";
-import { isoDate } from "@/lib/format";
+import { isoDate, signClass } from "@/lib/format";
 import { navFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
+
+function latest(ind: MacroIndicator): string {
+  return ind.units === "%" ? `${ind.latest_value.toFixed(2)}%` : ind.latest_value.toFixed(2);
+}
+
+function delta(ind: MacroIndicator): string {
+  if (ind.change == null) return "—";
+  const sign = ind.change > 0 ? "+" : ind.change < 0 ? "−" : "";
+  const mag = Math.abs(ind.change).toFixed(2);
+  return ind.units === "%" ? `${sign}${mag} pp` : `${sign}${mag}`;
+}
 
 // Macro detail page (metron-ops) — reinstated from the #64 redirect. Key US macro
 // indicators from FRED (public-domain → beta-safe, ungated) with a ~12-month chart each.
@@ -43,11 +54,33 @@ export default async function MacroPage({ params }: { params: { id: string } }) 
       </p>
 
       {ready ? (
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {macro.indicators.map((ind) => (
-            <MacroChart key={ind.key} ind={ind} />
-          ))}
-        </div>
+        <>
+          {/* Latest-readings table (metron-ops#49). "Next expected" / forecast columns
+              land when the producer publishes FRED release dates (#13) — until then the
+              note above is the honest placeholder rather than a column of dashes. */}
+          <Section title="Latest readings">
+            <Table head={["Indicator", "Latest", "Change", "As of"]}>
+              {macro.indicators.map((ind) => (
+                <tr key={ind.key} className="border-b border-line last:border-0">
+                  <td className="px-4 py-2">
+                    <Link href={`#${ind.key}`} className="hover:underline" title={`${ind.label} — chart`}>
+                      {ind.label}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-2 text-right tabular-nums">{latest(ind)}</td>
+                  <td className={`px-4 py-2 text-right tabular-nums ${signClass(ind.change ?? 0)}`}>{delta(ind)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums text-muted">{isoDate(ind.latest_date)}</td>
+                </tr>
+              ))}
+            </Table>
+          </Section>
+
+          <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {macro.indicators.map((ind) => (
+              <MacroChart key={ind.key} ind={ind} />
+            ))}
+          </div>
+        </>
       ) : (
         <div className="mt-4">
           <Empty>{macro.reason ?? "No macro data available yet."}</Empty>
