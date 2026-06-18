@@ -9,8 +9,9 @@ trade feed.
 from __future__ import annotations
 
 from datetime import date
+from types import SimpleNamespace
 
-from api.services.performance import _lot_positions_asof
+from api.services.performance import _lot_positions_asof, _no_lot_flat_value
 
 # (ticker, qty, cost_basis, open_date)
 OPEN = [("AAPL", 6.0, 900.0, date(2025, 1, 15)), ("AAPL", 4.0, 600.0, date(2025, 12, 19))]
@@ -39,3 +40,14 @@ def test_open_lots_accumulate_by_open_date():
     # 2026-01-01: both AAPL lots open (10), MSFT long closed.
     pos, cost = _lot_positions_asof(OPEN, CLOSED, date(2026, 1, 1))
     assert pos["AAPL"] == 10.0 and cost["AAPL"] == 1500.0 and "MSFT" not in pos
+
+
+def test_no_lot_flat_value_sums_only_uncovered_priced_holdings():
+    held = [
+        SimpleNamespace(ticker="AAPL", market_value=1000.0, cost_basis_base=800.0),    # has lots → excluded
+        SimpleNamespace(ticker="BOND1", market_value=5000.0, cost_basis_base=4900.0),  # no lots → flat
+        SimpleNamespace(ticker="FDRXX", market_value=2000.0, cost_basis_base=2000.0),  # no lots → flat
+        SimpleNamespace(ticker="NOPX", market_value=None, cost_basis_base=None),       # unpriced → skipped
+    ]
+    nav, cost, tickers = _no_lot_flat_value(held, {"AAPL"})
+    assert nav == 7000.0 and cost == 6900.0 and set(tickers) == {"BOND1", "FDRXX"}
