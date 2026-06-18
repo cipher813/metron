@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from api.db import models
 from api.services import analytics
+from api.services import fx as fx_service
 from api.services import prices as price_service
 from portfolio_analytics.domain.ledger import TxnType
 from portfolio_analytics.prices import ClosePoint, HistorySource, fetch_latest_closes
@@ -707,6 +708,36 @@ def _lot_positions_asof(open_lots, closed_lots, when: date):
     return pos, cost
 
 
+def _ticker_currencies(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID) -> dict[str, str]:
+    """ticker → native currency, from the lot tables — so historical native prices can be
+    FX-converted to base before they enter NAV (a foreign close is not a USD value)."""
+    out: dict[str, str] = {}
+    for model in (models.OpenLot, models.RealizedLot):
+        for ticker, ccy in session.execute(
+            select(model.ticker, model.currency)
+            .join(models.Account, model.account_id == models.Account.id)
+            .where(model.tenant_id == tenant_id, models.Account.portfolio_id == portfolio_id)
+        ).all():
+            out.setdefault(ticker, ccy or "USD")
+    return out
+
+
+def _no_lot_flat_value(held, tickers_with_lots: set[str]) -> tuple[float, float, list[str]]:
+    """Current base value + cost of holdings that have NO lots (e.g. bonds / money-market
+    funds with no lot detail). Reconstruction can't place them on past dates, so they're
+    carried FLAT-BACKWARD at current value rather than dropped — dropping undercounts the
+    past and manufactures volatility (the metron-ops#44 lesson, applied to whole holdings)."""
+    nav = cost = 0.0
+    tickers: list[str] = []
+    for h in held:
+        if h.ticker in tickers_with_lots or h.market_value is None:
+            continue
+        nav += h.market_value
+        cost += h.cost_basis_base or 0.0
+        tickers.append(h.ticker)
+    return nav, cost, tickers
+
+
 def nav_history_estimated(session: Session, tenant_id: uuid.UUID, portfolio_id: uuid.UUID) -> tuple[bool, str | None]:
     """Is the reconstructed NAV history an ESTIMATE (incomplete lot coverage)?
 
@@ -771,11 +802,38 @@ def reconstruct_snapshots(
     price_service.backfill_prices(session, [*symbols, "SPY"], first, today, source=source)
     history = price_service.close_history_by_symbol(session, [*symbols, "SPY"])
     spy_series = history.get("SPY")
-    current_px = {
-        h.ticker: h.last_price
-        for h in analytics.valued_holdings(session, tenant_id, portfolio_id)
-        if h.last_price is not None
-    }
+    held = analytics.valued_holdings(session, tenant_id, portfolio_id)
+    current_px = {h.ticker: h.last_price for h in held if h.last_price is not None}
+
+    # Holdings covered by neither lots NOR the transaction ledger (e.g. a money-market
+    # sweep with no lot detail and no trade feed) can't be placed historically → carry them
+    # flat-backward at current base value rather than drop them (metron-ops#74). A holding
+    # the ledger DOES value is excluded here so it isn't double-counted.
+    covered = {t for t, *_ in open_lots}
+    if ledger_txns:
+        _full_ledger, _ = analytics.build_portfolio_ledger(ledger_by_account, log=False)
+        covered |= {t for t in _full_ledger.open_lots if _full_ledger.position(t)[0] > 0}
+    flat_nav, flat_cost, _flat_tickers = _no_lot_flat_value(held, covered)
+
+    # FX: convert each ticker's NATIVE historical price to base USD at the rate as-of the
+    # valuation date (a foreign close is not a USD value — the foreign-holding spike).
+    ticker_ccy = _ticker_currencies(session, tenant_id, portfolio_id)
+    foreign = sorted({c for c in ticker_ccy.values() if c and c != "USD"})
+    if foreign:
+        fx_service.backfill_fx_rates(session, foreign, first, today, base="USD")
+    _rate_cache: dict[tuple[str, date], float] = {}
+
+    def _rate(ccy: str, when: date) -> float:
+        if not ccy or ccy == "USD":
+            return 1.0
+        key = (ccy, when)
+        if key not in _rate_cache:
+            _rate_cache[key] = (
+                fx_service.rate_as_of(session, ccy, when)
+                or fx_service.latest_rate_to_base(session, ccy)
+                or 1.0
+            )
+        return _rate_cache[key]
 
     # Flows are cash deposits/withdrawals across ALL accounts (TWR sub-period breaks).
     flow_dates = [t.when for _aid, t in by_account if t.type in (TxnType.DEPOSIT, TxnType.WITHDRAWAL)]
@@ -802,9 +860,12 @@ def reconstruct_snapshots(
             cost_basis += cost[ticker]
             px = _asof_close(history.get(ticker), when) or current_px.get(ticker)
             if px is not None:
-                nav += shares * px
+                nav += shares * px * _rate(ticker_ccy.get(ticker, "USD"), when)
                 valued_any = True
-        if not valued_any:
+        # No-lot holdings carried flat at current value (in addition to the lot-valued set).
+        nav += flat_nav
+        cost_basis += flat_cost
+        if not valued_any and flat_nav == 0:
             continue
         flow = _net_purchases(session, tenant_id, portfolio_id, after=prev, through=when)
         _upsert_snapshot(
