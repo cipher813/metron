@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 from api.config import settings
 from api.db.session import create_all
 from api.plugins import active_plugins
-from api.routers import macro, meta, portfolios
+from api.routers import indices, macro, meta, portfolios
 from api.services.demo import DEMO_TENANT_ID
 
 
@@ -86,6 +86,7 @@ def health() -> dict:
 app.include_router(meta.router)
 app.include_router(portfolios.router)
 app.include_router(macro.router)
+app.include_router(indices.router)
 
 # Mount any out-of-tree premium plugins (metron-ops). Importing them here registers
 # their ORM models on the shared Base *before* lifespan's create_all runs, so a

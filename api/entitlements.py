@@ -66,6 +66,9 @@ FEATURES: tuple[Feature, ...] = (
     # Earnings calendar comes from the data-spine (yfinance-derived) → feed-gated, so it's
     # hidden in the no-feed beta rather than shown empty (metron-ops#52/#53).
     Feature("calendar", "Calendar (earnings)", ("feed",)),
+    # Major-index intraday strip (SPY/QQQ/IWM proxies) on the Overview — the index/ETF
+    # quotes come from the licensed feed, so it's Pro-only and locked in the no-feed beta.
+    Feature("indices", "Market indices (intraday)", ("feed",)),
     Feature("etf_lookthrough", "ETF look-through", ("etf_vendor",)),
     Feature("agentic_research", "Agentic quant research", ("feed",)),
     Feature("ai_advisor", "AI Advisor", ()),
@@ -86,7 +89,7 @@ _BETA = frozenset({
     "overview", "income", "transactions", "tax",
     "concentration", "performance", "macro", "fundamentals",
 })
-_PRO = _BETA | {"auto_sync", "benchmark", "risk", "attribution", "scenarios", "calendar", "etf_lookthrough"}
+_PRO = _BETA | {"auto_sync", "benchmark", "risk", "attribution", "scenarios", "calendar", "etf_lookthrough", "indices"}
 _AGENTIC = _PRO | {"agentic_research"}
 _PERSONAL = _AGENTIC | {"ai_advisor", "alpha_engine"}
 
@@ -111,6 +114,42 @@ def required_tier(feature_key: str) -> str | None:
         if feature_key in t.features:
             return t.key
     return None
+
+
+def effective_axes(
+    *, default_tier: str, feed_entitled: bool, simulator: bool,
+    preview_tier: str | None = None, preview_feed: bool | None = None,
+) -> tuple[str, bool]:
+    """The ``(tier, feed)`` a request should resolve against: this deployment's defaults,
+    overridden by the owner tier-simulator preview ONLY when the simulator is on (never on
+    the public product, so a normal caller can't re-scope its own entitlements). The
+    canonical form of the override mirrored ad-hoc in ``GET /meta/entitlements`` and
+    ``portfolios._effective_entitlement``."""
+    tier, feed = default_tier, feed_entitled
+    if simulator:
+        if preview_tier is not None:
+            tier = preview_tier
+        if preview_feed is not None:
+            feed = preview_feed
+    return tier, feed
+
+
+def feature_state(
+    feature_key: str, *, default_tier: str, feed_entitled: bool, simulator: bool,
+    preview_tier: str | None = None, preview_feed: bool | None = None,
+) -> dict:
+    """One feature's resolved entitlement dict (``available`` / ``reason`` /
+    ``required_tier`` / …) for a request's effective axes. A bad preview tier falls back
+    to the deployment default rather than raising."""
+    tier, feed = effective_axes(
+        default_tier=default_tier, feed_entitled=feed_entitled, simulator=simulator,
+        preview_tier=preview_tier, preview_feed=preview_feed,
+    )
+    try:
+        resolved = resolve(tier, feed_enabled=feed)
+    except ValueError:
+        resolved = resolve(default_tier, feed_enabled=feed_entitled)
+    return next(f for f in resolved["features"] if f["key"] == feature_key)
 
 
 def resolve(tier: str, *, feed_enabled: bool) -> dict:
