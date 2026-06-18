@@ -13,6 +13,7 @@ import {
   setSnapTradeExclusionAction,
   snapTradeConnectUrlAction,
   syncFlexAction,
+  syncFlexStoredAction,
   syncSnapTradeAction,
   type ActionResult,
 } from "@/app/portfolios/[id]/actions";
@@ -82,9 +83,13 @@ function FileImport({
   );
 }
 
-function FlexImport({ portfolioId }: { portfolioId: string }) {
+function FlexImport({ portfolioId, flexStored }: { portfolioId: string; flexStored: boolean }) {
   const [pending, start] = useTransition();
+  const [storedPending, startStored] = useTransition();
   const [result, setResult] = useState<ActionResult | null>(null);
+  // When the deployment has stored Flex creds, lead with one-click sync and tuck the
+  // BYO-token form behind a toggle (still available for a one-off / different query).
+  const [showByo, setShowByo] = useState(!flexStored);
 
   function onSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -93,12 +98,33 @@ function FlexImport({ portfolioId }: { portfolioId: string }) {
   }
 
   return (
-    <form onSubmit={onSubmit} className="rounded-lg border border-line p-4">
+    <div className="rounded-lg border border-line p-4">
       <div className="text-sm font-medium">IBKR Flex sync</div>
-      <p className="mt-1 text-xs text-muted">
-        Your Flex token is used for one fetch and never stored.
-      </p>
-      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+      {flexStored ? (
+        <>
+          <p className="mt-1 text-xs text-muted">Syncs your saved Flex query — no token paste.</p>
+          <button
+            type="button"
+            disabled={storedPending}
+            onClick={() => startStored(async () => setResult(await syncFlexStoredAction(portfolioId)))}
+            className="mt-2 rounded bg-ink px-3 py-1.5 text-sm font-medium text-paper hover:bg-white disabled:opacity-50"
+          >
+            {storedPending ? "Syncing…" : "Sync IBKR"}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowByo((v) => !v)}
+            className="ml-3 text-xs text-muted underline hover:text-ink"
+          >
+            {showByo ? "Hide one-off token" : "Use a different token"}
+          </button>
+          <Result result={result} />
+        </>
+      ) : null}
+      {showByo ? (
+        <form onSubmit={onSubmit} className={flexStored ? "mt-3 border-t border-line pt-3" : "mt-1"}>
+          <p className="text-xs text-muted">Your Flex token is used for one fetch and never stored.</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2">
         <input
           type="password"
           name="token"
@@ -116,15 +142,17 @@ function FlexImport({ portfolioId }: { portfolioId: string }) {
           className="rounded border border-line px-2 py-1.5 text-sm"
         />
       </div>
-      <button
-        type="submit"
-        disabled={pending}
-        className="mt-2 rounded bg-ink px-3 py-1.5 text-sm font-medium text-paper hover:bg-white disabled:opacity-50"
-      >
-        {pending ? "Syncing…" : "Sync Flex"}
-      </button>
-      <Result result={result} />
-    </form>
+          <button
+            type="submit"
+            disabled={pending}
+            className="mt-2 rounded bg-ink px-3 py-1.5 text-sm font-medium text-paper hover:bg-white disabled:opacity-50"
+          >
+            {pending ? "Syncing…" : "Sync Flex"}
+          </button>
+          {!flexStored ? <Result result={result} /> : null}
+        </form>
+      ) : null}
+    </div>
   );
 }
 
@@ -291,7 +319,7 @@ function SnapTradeCard({ portfolioId }: { portfolioId: string }) {
   );
 }
 
-export function ImportPanel({ portfolioId }: { portfolioId: string }) {
+export function ImportPanel({ portfolioId, flexStored = false }: { portfolioId: string; flexStored?: boolean }) {
   return (
     <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
       <FileImport portfolioId={portfolioId} action={importCsvAction} label="Import CSV" accept=".csv,text/csv" />
@@ -301,7 +329,7 @@ export function ImportPanel({ portfolioId }: { portfolioId: string }) {
         label="Import OFX / QFX"
         accept=".ofx,.qfx,application/x-ofx"
       />
-      <FlexImport portfolioId={portfolioId} />
+      <FlexImport portfolioId={portfolioId} flexStored={flexStored} />
       <SnapTradeCard portfolioId={portfolioId} />
     </div>
   );

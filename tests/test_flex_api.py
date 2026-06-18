@@ -104,3 +104,32 @@ def test_flex_requires_tenant_ownership(client, tenant, flex_ok):
     pid = _new_portfolio(client, tenant)
     other = str(uuid.uuid4())
     assert _sync_flex(client, other, pid).status_code == 404
+
+
+# ── Stored-credential one-click sync (metron-ops#82) ─────────────────────────
+
+
+def test_sync_flex_stored_404_when_not_configured(client, tenant, flex_ok):
+    pid = _new_portfolio(client, tenant)
+    r = client.post(f"/portfolios/{pid}/sync/flex", headers={"X-Tenant-Id": tenant})
+    assert r.status_code == 404  # no stored creds on a default deployment
+
+
+def test_sync_flex_stored_uses_settings_creds(client, tenant, flex_ok, monkeypatch):
+    from api.config import settings
+
+    monkeypatch.setattr(settings, "flex_token", "stored-tok")
+    monkeypatch.setattr(settings, "flex_query_id", "stored-qid")
+    pid = _new_portfolio(client, tenant)
+    r = client.post(f"/portfolios/{pid}/sync/flex", headers={"X-Tenant-Id": tenant})
+    assert r.status_code == 200
+    assert r.json()["positions_imported"] == 2  # same fixture as the BYO path
+
+
+def test_meta_reports_flex_stored(client, monkeypatch):
+    assert client.get("/meta").json()["connectors"]["flex_stored"] is False
+    from api.config import settings
+
+    monkeypatch.setattr(settings, "flex_token", "tok")
+    monkeypatch.setattr(settings, "flex_query_id", "qid")
+    assert client.get("/meta").json()["connectors"]["flex_stored"] is True

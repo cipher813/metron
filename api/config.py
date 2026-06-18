@@ -18,6 +18,12 @@ class Settings(BaseSettings):
     # tenant pull another's brokerage data. M2's per-user SnapTrade connection-portal flow
     # replaces this; it is not this endpoint.
     snaptrade_personal: bool = False
+    # Stored IBKR Flex credentials (single-operator owner build) — when both are set, the
+    # IBKR sync runs from these instead of a per-request token paste (metron-ops#82), the
+    # same server-side-credential pattern as SnapTrade above. Treated as a secret (the Flex
+    # token is read-only + expirable). Empty → the UI falls back to the BYO-token form.
+    flex_token: str = ""
+    flex_query_id: str = ""
     # Data-spine sync (metron ↔ alpha-engine-data). `alpha-engine-data` is the system's
     # sole market-data producer; Metron publishes its held-ticker universe here and reads
     # back EOD-close / FX artifacts (no direct market-data API calls). The bucket is the

@@ -636,6 +636,24 @@ export async function syncFlex(tenantId: string, id: string, token: string, quer
   return readResult(res, "IBKR Flex sync");
 }
 
+/** One-click IBKR sync from the deployment's STORED Flex credentials (metron-ops#82) —
+ * no token paste. 404 when none are configured (the UI shows the BYO-token form instead). */
+export async function syncFlexStored(tenantId: string, id: string): Promise<ImportResult> {
+  const res = await fetch(`${API_URL}/portfolios/${id}/sync/flex`, {
+    method: "POST",
+    headers: { "X-Tenant-Id": tenantId },
+    cache: "no-store",
+  });
+  return readResult(res, "IBKR Flex sync");
+}
+
+/** Deployment connector capabilities — drives which one-click sync buttons the UI shows. */
+export type Meta = {
+  engine: string;
+  connectors: { flex_stored: boolean; snaptrade_personal: boolean };
+};
+export const getMeta = (tenantId: string) => get<Meta>(tenantId, "/meta");
+
 /** Sync the operator's linked SnapTrade brokerages into a portfolio (every linked
  * connection, minus any the portfolio has excluded). Personal/single-operator only —
  * 404 when the deployment hasn't enabled it. */

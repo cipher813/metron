@@ -44,6 +44,12 @@ def meta() -> dict:
             "advice": False,
             "read_only": True,
         },
+        # Connector capabilities the UI gates on — server-side stored credentials enable a
+        # one-click sync (no paste). metron-ops#82.
+        "connectors": {
+            "flex_stored": bool(settings.flex_token and settings.flex_query_id),
+            "snaptrade_personal": settings.snaptrade_personal,
+        },
     }
 
 
