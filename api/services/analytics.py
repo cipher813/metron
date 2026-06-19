@@ -35,6 +35,7 @@ from api.services import prices as price_service
 from portfolio_analytics.domain.ledger import Ledger, RealizedGain, Transaction, TxnType, build_ledger
 from portfolio_analytics.domain.realized import YearlyIncome, summarize_income_by_year
 from portfolio_analytics.ingestion.base import SNAPSHOT_SOURCES
+from portfolio_analytics.prices import ClosePoint
 
 logger = logging.getLogger(__name__)
 
@@ -533,6 +534,8 @@ def valued_holdings(
     portfolio_id: uuid.UUID,
     account_id: uuid.UUID | None = None,
     account_ids: Collection[uuid.UUID] | None = None,
+    *,
+    prices: dict[str, ClosePoint] | None = None,
 ) -> list[Holding]:
     """Holdings enriched with market value, converted to the portfolio base currency.
 
@@ -542,6 +545,11 @@ def valued_holdings(
     (``base`` per 1 unit of the holding's currency) folds them into the base-currency
     ``market_value`` / ``cost_basis_base`` / ``unrealized_gain``.
 
+    ``prices`` overrides the price source (``{ticker: ClosePoint}``): the LIVE intraday
+    valuation passes intraday last-prices merged over EOD closes so NAV recomputes from
+    fresh balances (metron-ops#79). Default ``None`` reads the latest cached EOD close —
+    the persisted NAV-history snapshot path always uses this, never intraday.
+
     Never fabricates: an unpriced holding keeps its valuation None (shown at cost), and a
     foreign holding with **no cached FX rate** keeps its BASE fields None (the native
     ``_local`` values are still shown) rather than mis-counting 1 unit foreign as 1 USD.
@@ -550,7 +558,8 @@ def valued_holdings(
     if not held:
         return held
     base = _base_currency(session, portfolio_id)
-    prices = price_service.latest_close_by_symbol(session, [h.ticker for h in held])
+    if prices is None:
+        prices = price_service.latest_close_by_symbol(session, [h.ticker for h in held])
     fx_rates = fx_service.rates_to_base(session, [h.currency for h in held], base=base)
     meta = _security_meta_by_symbol(session, [h.ticker for h in held])
     user_labels = labels.labels_by_symbol(session, tenant_id, [h.ticker for h in held])
@@ -924,15 +933,18 @@ def summary(
     tenant_id: uuid.UUID,
     portfolio_id: uuid.UUID,
     account_ids: Collection[uuid.UUID] | None = None,
+    *,
+    prices: dict[str, ClosePoint] | None = None,
 ) -> PortfolioSummary:
     """Portfolio-level totals for the home view — cost basis, realized, income, plus
     market value / unrealized P&L when prices are cached (None otherwise, never
     fabricated). ``account_ids`` scopes every total to the selected accounts; None =
-    whole portfolio."""
+    whole portfolio. ``prices`` overrides the price source (the LIVE intraday valuation
+    passes intraday last over EOD close so the headline NAV is fresh — metron-ops#79)."""
     from api.services import account_meta  # local import avoids a cycle (account_meta → models)
 
     portfolio = session.get(models.Portfolio, portfolio_id)
-    held = valued_holdings(session, tenant_id, portfolio_id, account_ids=account_ids)
+    held = valued_holdings(session, tenant_id, portfolio_id, account_ids=account_ids, prices=prices)
     closed = realized(session, tenant_id, portfolio_id, account_ids=account_ids)
     # Tax-deferred accounts in scope → their withdrawals are taxable distributions.
     deferred = account_meta.tax_deferred_account_ids(session, tenant_id, portfolio_id)

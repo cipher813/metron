@@ -1034,6 +1034,22 @@ export async function getIndices(
   return res.json() as Promise<Indices>;
 }
 
+// Live-valuation status (metron-ops#79): whether the headline NAV + position values are
+// currently recomputed from intraday balances, and how fresh the snapshot is. Drives the
+// "intraday · ~15-min delayed · as of HH:MM" label + the client poll that re-renders the
+// page so NAV stays fresh while Metron is open.
+export type IntradayStatus = {
+  applied: boolean;
+  as_of_utc: string | null;
+  stale: boolean;
+  n_priced: number;
+  reason: string | null;
+};
+
+export async function getIntradayStatus(tenantId: string, id: string): Promise<IntradayStatus> {
+  return get<IntradayStatus>(tenantId, `/portfolios/${id}/intraday`);
+}
+
 export type AdvisorSectorWeight = { sector: string; weight_pct: number; flag: string };
 export type AdvisorConcentration = { ticker: string; weight_pct: number; limit_pct: number };
 export type AdvisorGeo = {
