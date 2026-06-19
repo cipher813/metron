@@ -26,8 +26,8 @@ from portfolio_analytics.calendar import EarningsSource, fetch_earnings_dates
 @dataclass
 class CalendarEvent:
     event_date: date
-    kind: str  # "earnings" (FOMC / macro-release kinds deferred)
-    ticker: str
+    kind: str  # "earnings" | "release" | "fomc" (macro events — metron-ops#49)
+    ticker: str  # held ticker for earnings; the series id ("UNRATE"/"FOMC") for macro
     label: str
 
 
@@ -71,6 +71,29 @@ def refresh_earnings(session: Session, symbols: list[str], *, source: EarningsSo
     return updated
 
 
+def _macro_events(today: date, end: date, source) -> list[CalendarEvent]:
+    """Forward macro events (FOMC + curated FRED releases) within the horizon, from the
+    spine macro artifact (metron-ops#49). Portfolio-independent. Fail-soft: a bad row is
+    skipped, a missing artifact yields none."""
+    out: list[CalendarEvent] = []
+    for ev in source() or []:
+        try:
+            when = date.fromisoformat(str(ev["date"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (today <= when <= end):
+            continue
+        out.append(
+            CalendarEvent(
+                event_date=when,
+                kind=str(ev.get("kind") or "release"),
+                ticker=str(ev.get("series_id") or ""),
+                label=str(ev.get("label") or "Macro release"),
+            )
+        )
+    return out
+
+
 def upcoming_events(
     session: Session,
     tenant_id: uuid.UUID,
@@ -78,28 +101,40 @@ def upcoming_events(
     *,
     today: date,
     horizon_days: int = 120,
+    macro_events_source=None,
 ) -> CalendarSummary:
-    """Held-ticker earnings within ``[today, today + horizon_days]``, from cached dates,
-    sorted by date. Reads only the cache — POST .../calendar/refresh to populate it."""
-    tickers = _held_tickers(session, tenant_id, portfolio_id)
+    """Held-ticker earnings PLUS forward macro events (FOMC + macro releases, metron-ops#49)
+    within ``[today, today + horizon_days]``, sorted by date. Earnings come from the cached
+    dates (POST .../calendar/refresh to populate); macro events from the spine macro
+    artifact. ``macro_events_source`` is injectable for tests (defaults to the S3 read)."""
+    if macro_events_source is None:
+        from portfolio_analytics.macro.spine_source import spine_macro_events
+
+        macro_events_source = spine_macro_events
+
     summary = CalendarSummary(as_of=today, horizon_days=horizon_days)
-    if not tickers:
-        return summary
     end = today + timedelta(days=horizon_days)
-    rows = session.execute(
-        select(models.Security.symbol, models.Security.next_earnings_date).where(
-            models.Security.symbol.in_(tickers),
-            models.Security.next_earnings_date.is_not(None),
-        )
-    ).all()
-    seen: set[str] = set()
     events: list[CalendarEvent] = []
-    for symbol, when in rows:
-        if symbol in seen or when is None or not (today <= when <= end):
-            continue
-        seen.add(symbol)
-        events.append(CalendarEvent(event_date=when, kind="earnings", ticker=symbol, label=f"{symbol} earnings"))
-    events.sort(key=lambda e: (e.event_date, e.ticker))
+
+    tickers = _held_tickers(session, tenant_id, portfolio_id)
+    if tickers:
+        rows = session.execute(
+            select(models.Security.symbol, models.Security.next_earnings_date).where(
+                models.Security.symbol.in_(tickers),
+                models.Security.next_earnings_date.is_not(None),
+            )
+        ).all()
+        seen: set[str] = set()
+        for symbol, when in rows:
+            if symbol in seen or when is None or not (today <= when <= end):
+                continue
+            seen.add(symbol)
+            events.append(CalendarEvent(event_date=when, kind="earnings", ticker=symbol, label=f"{symbol} earnings"))
+
+    # Macro events are global (not portfolio-scoped) — surfaced even with no holdings.
+    events.extend(_macro_events(today, end, macro_events_source))
+
+    events.sort(key=lambda e: (e.event_date, e.kind, e.ticker))
     summary.events = events
     summary.n_events = len(events)
     return summary

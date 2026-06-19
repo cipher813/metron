@@ -48,6 +48,36 @@ def test_missing_artifact_fail_soft():
     assert macro_spine.spine_macro_series(INDICATORS, s3=s3) == {}
 
 
+_MACRO_V2 = {
+    "schema_version": 2, "as_of": "2026-06-11",
+    "series": {"FEDFUNDS": [["2026-06-01", 5.33]], "UNRATE": [["2026-05-01", 4.1]]},
+    "next_release": {"FEDFUNDS": "2026-07-29", "UNRATE": "2026-07-02"},
+    "release_events": [
+        {"date": "2026-07-02", "kind": "release", "series_id": "UNRATE", "label": "Employment Situation"},
+        {"date": "2026-07-29", "kind": "fomc", "series_id": "FOMC", "label": "FOMC Meeting"},
+    ],
+}
+
+
+def test_next_release_parsed_onto_series():
+    out = macro_spine.spine_macro_series(INDICATORS, s3=_s3_with(_MACRO_V2))
+    assert out["fed_funds"].next_release == date(2026, 7, 29)
+    assert out["unemployment"].next_release == date(2026, 7, 2)
+
+
+def test_next_release_absent_in_v1_is_none():
+    out = macro_spine.spine_macro_series(INDICATORS, s3=_s3_with(_MACRO))
+    assert out["fed_funds"].next_release is None  # v1 artifact carries no next_release
+
+
+def test_spine_macro_events():
+    events = macro_spine.spine_macro_events(s3=_s3_with(_MACRO_V2))
+    assert [e["kind"] for e in events] == ["release", "fomc"]
+    # Missing artifact / field → empty, never fabricated.
+    assert macro_spine.spine_macro_events(s3=_s3_with(None)) == []
+    assert macro_spine.spine_macro_events(s3=_s3_with(_MACRO)) == []
+
+
 def test_fetch_macro_series_defaults_to_spine(monkeypatch):
     from portfolio_analytics.macro.source import MacroObservation, MacroSeries
     monkeypatch.setattr(macro_spine, "spine_macro_series",

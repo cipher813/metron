@@ -533,6 +533,7 @@ export type MacroIndicator = {
   latest_date: string;
   prior_value: number | null;
   change: number | null;
+  next_release: string | null; // next scheduled release date (metron-ops#49)
   history: MacroPoint[];
 };
 

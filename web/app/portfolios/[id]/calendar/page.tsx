@@ -8,6 +8,13 @@ import { requireTenantId } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
 
+/** Human label for an event kind (earnings | release | fomc — metron-ops#49). */
+function eventType(kind: string): string {
+  if (kind === "earnings") return "Earnings";
+  if (kind === "fomc") return "FOMC";
+  return "Macro";
+}
+
 export default async function CalendarPage({ params }: { params: { id: string } }) {
   const { id } = params;
   const tenantId = await requireTenantId();
@@ -30,23 +37,28 @@ export default async function CalendarPage({ params }: { params: { id: string } 
 
       <h1 className="mt-3 text-lg font-semibold">Calendar</h1>
       <p className="text-sm text-muted">
-        Upcoming earnings for your holdings, within {cal.horizon_days} days. Refresh to re-source the dates.
+        Upcoming holding earnings plus macro events (FOMC + key releases), within {cal.horizon_days} days. Refresh
+        to re-source the earnings dates.
       </p>
 
       <div className="mt-3">
         <RefreshCalendar portfolioId={id} feedOn={entitlements?.feed_enabled} />
       </div>
 
-      <Section title="Upcoming earnings" note={`${cal.n_events} event${cal.n_events === 1 ? "" : "s"}`}>
+      <Section title="Upcoming events" note={`${cal.n_events} event${cal.n_events === 1 ? "" : "s"}`}>
         {cal.events.length === 0 ? (
-          <Empty>No upcoming earnings cached — refresh to source them for your holdings.</Empty>
+          <Empty>No upcoming events — refresh to source earnings for your holdings.</Empty>
         ) : (
-          <Table head={["Date", "Ticker", "Event"]}>
+          <Table head={["Date", "Type", "Event"]}>
             {cal.events.map((e) => (
-              <tr key={`${e.ticker}-${e.event_date}`} className="border-b border-line last:border-0">
+              <tr key={`${e.kind}-${e.ticker}-${e.event_date}`} className="border-b border-line last:border-0">
                 <td className="px-4 py-2 font-medium tabular-nums">{isoDate(e.event_date)}</td>
-                <td className="px-4 py-2">{e.ticker}</td>
-                <td className="px-4 py-2 text-muted">{e.label}</td>
+                <td className="px-4 py-2">
+                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                    {eventType(e.kind)}
+                  </span>
+                </td>
+                <td className="px-4 py-2">{e.label}</td>
               </tr>
             ))}
           </Table>

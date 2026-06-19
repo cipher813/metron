@@ -49,6 +49,9 @@ class MacroSeries:
     """One indicator's recent observations, ascending by date (most recent last)."""
 
     observations: list[MacroObservation] = field(default_factory=list)
+    # Next scheduled release date (the "Next expected" column), when the producer
+    # publishes it (spine schema v2 — metron-ops#49). None for the direct-FRED fallback.
+    next_release: date | None = None
 
 
 # A macro source maps the indicator set → each indicator key's recent series. The second
