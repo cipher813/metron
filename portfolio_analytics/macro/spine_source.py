@@ -48,6 +48,7 @@ def spine_macro_series(indicators: list[Indicator], api_key: str = "", *, s3=Non
     Indicators whose series the artifact lacks are omitted."""
     art = _read_json(s3 or _s3(), MACRO_LATEST_KEY) or {}
     series_by_id = art.get("series", {})
+    next_release_by_id = art.get("next_release", {}) or {}  # spine schema v2 (metron-ops#49)
     out: dict[str, MacroSeries] = {}
     for ind in indicators:
         rows = series_by_id.get(ind.series_id)
@@ -60,5 +61,22 @@ def spine_macro_series(indicators: list[Indicator], api_key: str = "", *, s3=Non
             except (TypeError, ValueError, IndexError):
                 continue
         if obs:
-            out[ind.key] = MacroSeries(observations=obs)
+            nr = None
+            raw = next_release_by_id.get(ind.series_id)
+            if raw:
+                try:
+                    nr = date.fromisoformat(str(raw))
+                except ValueError:
+                    nr = None
+            out[ind.key] = MacroSeries(observations=obs, next_release=nr)
     return out
+
+
+def spine_macro_events(*, s3=None) -> list[dict]:
+    """The forward macro event calendar (FOMC + curated FRED releases) from the spine's
+    macro artifact (schema v2 — metron-ops#49) → ``[{date, kind, series_id, label}, …]``.
+    Fail-soft: a missing artifact / field → ``[]`` (the Calendar shows no macro rows, never
+    fabricated)."""
+    art = _read_json(s3 or _s3(), MACRO_LATEST_KEY) or {}
+    events = art.get("release_events")
+    return events if isinstance(events, list) else []

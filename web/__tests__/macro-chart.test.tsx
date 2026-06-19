@@ -17,6 +17,7 @@ const ind = (over: Partial<MacroIndicator> = {}): MacroIndicator => ({
   latest_date: "2026-06-17",
   prior_value: 4.2,
   change: 0.05,
+  next_release: null,
   // API order is most-recent-first.
   history: [
     { obs_date: "2026-06-17", value: 4.25 },

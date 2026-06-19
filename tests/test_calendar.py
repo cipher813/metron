@@ -56,8 +56,45 @@ class TestCalendar:
 
     def test_empty_without_refresh(self, client, db_session, tenant):
         pid = _seed(client, tenant)
-        cal = calendar.upcoming_events(db_session, uuid.UUID(tenant), uuid.UUID(pid), today=TODAY)
+        cal = calendar.upcoming_events(
+            db_session, uuid.UUID(tenant), uuid.UUID(pid), today=TODAY, macro_events_source=lambda: []
+        )
         assert cal.n_events == 0 and cal.events == []
+
+    def test_macro_events_merged_and_sorted(self, client, db_session, tenant):
+        # Macro events (FOMC + releases) merge with held-ticker earnings, filtered to the
+        # horizon and sorted by date (metron-ops#49).
+        pid = _seed(client, tenant)
+        calendar.refresh_earnings(db_session, ["AAPL", "MSFT"], source=_earnings_src)
+
+        def macro_src():
+            return [
+                {"date": "2024-06-05", "kind": "release", "series_id": "UNRATE", "label": "Employment Situation"},
+                {"date": "2024-06-18", "kind": "fomc", "series_id": "FOMC", "label": "FOMC Meeting"},
+                {"date": "2030-01-01", "kind": "fomc", "series_id": "FOMC", "label": "Beyond horizon"},  # filtered
+            ]
+
+        cal = calendar.upcoming_events(
+            db_session, uuid.UUID(tenant), uuid.UUID(pid), today=TODAY, macro_events_source=macro_src
+        )
+        # UNRATE 6/05, AAPL earnings 6/11, FOMC 6/18 — sorted by date; the 2030 event dropped.
+        assert [(e.event_date, e.kind) for e in cal.events] == [
+            (date(2024, 6, 5), "release"),
+            (date(2024, 6, 11), "earnings"),
+            (date(2024, 6, 18), "fomc"),
+        ]
+
+    def test_macro_events_show_without_holdings(self, client, db_session, tenant):
+        # An empty portfolio still shows global macro events (they aren't portfolio-scoped).
+        pid = client.post("/portfolios", json={"name": "Empty"}, headers={"X-Tenant-Id": tenant}).json()["id"]
+
+        def macro_src():
+            return [{"date": "2024-06-18", "kind": "fomc", "series_id": "FOMC", "label": "FOMC Meeting"}]
+
+        cal = calendar.upcoming_events(
+            db_session, uuid.UUID(tenant), uuid.UUID(pid), today=TODAY, macro_events_source=macro_src
+        )
+        assert cal.n_events == 1 and cal.events[0].kind == "fomc"
 
 
 class TestCalendarEndpoints:

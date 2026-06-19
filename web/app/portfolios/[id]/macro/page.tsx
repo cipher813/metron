@@ -49,17 +49,16 @@ export default async function MacroPage({ params }: { params: { id: string } }) 
       </div>
       <p className="text-sm text-muted">
         Key US macro indicators from FRED (public-domain), ~12-month history.
-        {macro.as_of ? ` Latest reading ${isoDate(macro.as_of)}.` : ""} Consensus forecasts and next-release
-        dates aren&apos;t wired yet (metron-ops#49).
+        {macro.as_of ? ` Latest reading ${isoDate(macro.as_of)}.` : ""} The Next-expected column shows each
+        series&apos; next scheduled release.
       </p>
 
       {ready ? (
         <>
-          {/* Latest-readings table (metron-ops#49). "Next expected" / forecast columns
-              land when the producer publishes FRED release dates (#13) — until then the
-              note above is the honest placeholder rather than a column of dashes. */}
+          {/* Latest-readings table (metron-ops#49): freshness ("As of") + the
+              producer-published next scheduled release ("Next expected", #13). */}
           <Section title="Latest readings">
-            <Table head={["Indicator", "Latest", "Change", "As of"]}>
+            <Table head={["Indicator", "Latest", "Change", "As of", "Next expected"]}>
               {macro.indicators.map((ind) => (
                 <tr key={ind.key} className="border-b border-line last:border-0">
                   <td className="px-4 py-2">
@@ -70,6 +69,9 @@ export default async function MacroPage({ params }: { params: { id: string } }) 
                   <td className="px-4 py-2 text-right tabular-nums">{latest(ind)}</td>
                   <td className={`px-4 py-2 text-right tabular-nums ${signClass(ind.change ?? 0)}`}>{delta(ind)}</td>
                   <td className="px-4 py-2 text-right tabular-nums text-muted">{isoDate(ind.latest_date)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums text-muted">
+                    {ind.next_release ? isoDate(ind.next_release) : "—"}
+                  </td>
                 </tr>
               ))}
             </Table>

@@ -40,6 +40,7 @@ class MacroIndicator:
     latest_date: date
     prior_value: float | None
     change: float | None  # latest − prior (same units), None with only one observation
+    next_release: date | None = None  # next scheduled release ("Next expected" — metron-ops#49)
     history: list[MacroPoint] = field(default_factory=list)
 
 
@@ -78,6 +79,7 @@ def macro_snapshot(*, source: MacroSource | None = None, history_limit: int = _H
                 latest_date=latest.obs_date,
                 prior_value=prior.value if prior else None,
                 change=(latest.value - prior.value) if prior else None,
+                next_release=series.next_release,
                 history=[MacroPoint(obs_date=o.obs_date, value=o.value) for o in recent],
             )
         )

@@ -34,6 +34,7 @@ class MacroIndicatorOut(BaseModel):
     latest_date: date
     prior_value: float | None
     change: float | None
+    next_release: date | None = None
     history: list[MacroPointOut]
 
 
