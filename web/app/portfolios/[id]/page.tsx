@@ -6,6 +6,7 @@ import { PerfTiles } from "@/components/perf-tiles";
 import { PortfolioNav } from "@/components/portfolio-nav";
 import { TierSimulator } from "@/components/tier-simulator";
 import { IndexStrip } from "@/components/index-strip";
+import { IntradayRefresher } from "@/components/intraday-refresher";
 import { RenamePortfolio } from "@/components/rename-portfolio";
 import { featureEntitlement, loadEntitlements, previewFromCookies, toFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
@@ -123,7 +124,12 @@ export default async function PortfolioPage({
       {/* Headline: total value, with unrealized broken out by tax treatment. */}
       {priced ? (
         <div className="mt-6 rounded-lg border border-line p-5">
-          <div className="text-xs uppercase tracking-wide text-muted">Total value</div>
+          <div className="flex items-baseline justify-between gap-2">
+            <div className="text-xs uppercase tracking-wide text-muted">Total value</div>
+            {/* Live-NAV refresher: recomputes the value from intraday balances every ~5 min
+                while open, and shows the delayed-as-of label when applied (metron-ops#79). */}
+            <IntradayRefresher portfolioId={id} />
+          </div>
           <div className="mt-1 text-3xl font-semibold tabular-nums">{moneyWhole(summary.market_value as number, ccy)}</div>
           <div className="mt-1 text-xs text-muted">cost basis {moneyWhole(summary.total_cost_basis, ccy)}</div>
           <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">

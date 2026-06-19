@@ -4,6 +4,7 @@ import { AccountPanel } from "@/components/account-panel";
 import { GroupedHoldings } from "@/components/grouped-holdings";
 import { HoldingsPerfChart } from "@/components/holdings-perf-chart";
 import { RefreshPrices } from "@/components/refresh-prices";
+import { IntradayRefresher } from "@/components/intraday-refresher";
 import { PortfolioNav } from "@/components/portfolio-nav";
 import { loadEntitlements, navFeatureStates } from "@/lib/entitlements";
 import { requireTenantId } from "@/lib/session";
@@ -62,7 +63,11 @@ export default async function HoldingsPage({
     <div>
       <PortfolioNav portfolioId={id} navQuery={navQuery} featureStates={featureStates} />
 
-      <h1 className="mt-3 text-lg font-semibold">Holdings</h1>
+      <div className="mt-3 flex items-baseline gap-2">
+        <h1 className="text-lg font-semibold">Holdings</h1>
+        {/* Position values revalue from intraday balances every ~5 min while open (#79). */}
+        <IntradayRefresher portfolioId={id} />
+      </div>
       <p className="text-sm text-muted">
         (De)activate accounts to see how they affect the positions below. The selection persists and the Overview
         metrics follow it.

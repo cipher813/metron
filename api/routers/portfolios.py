@@ -33,6 +33,7 @@ from api.services import (
     attribution,
     calendar,
     data_spine,
+    intraday,
     labels,
     performance,
     persistence,
@@ -215,6 +216,17 @@ class SummaryOut(BaseModel):
     market_value: float | None = None
     unrealized_gain: float | None = None
     n_unconverted: int = 0
+
+
+class IntradayStatusOut(BaseModel):
+    """Live-valuation status for the Overview/Holdings/Performance "intraday" label +
+    poll (metron-ops#79)."""
+
+    applied: bool                  # the intraday overlay is currently in effect
+    as_of_utc: str | None = None   # producer write time of the snapshot in use
+    stale: bool = False            # snapshot older than the freshness window (market closed?)
+    n_priced: int = 0              # held positions revalued from a fresh intraday quote
+    reason: str | None = None      # why not applied ("feed" / "stale" / "unavailable")
 
 
 class AccountDetailOut(BaseModel):
@@ -1314,7 +1326,14 @@ def get_holdings(
 ) -> list[analytics.Holding]:
     # Valued when a cached close exists for the ticker; cost-basis-only otherwise.
     # ``?account_id=`` (repeatable) scopes to the selected accounts; absent = all.
-    return analytics.valued_holdings(session, portfolio.tenant_id, portfolio.id, account_ids=account_ids)
+    # LIVE intraday overlay (metron-ops#79): during trading hours on a feed-entitled build,
+    # each position revalues from the intraday last; otherwise this is None → EOD close.
+    prices, _ = intraday.for_portfolio(
+        session, portfolio.tenant_id, portfolio.id, feed_entitled=settings.feed_entitled, account_ids=account_ids
+    )
+    return analytics.valued_holdings(
+        session, portfolio.tenant_id, portfolio.id, account_ids=account_ids, prices=prices
+    )
 
 
 def _taxable_scoped(
@@ -1864,5 +1883,30 @@ def get_summary(
 ) -> analytics.PortfolioSummary:
     """Portfolio home totals — cost basis, realized, income, plus market value /
     unrealized when prices are cached. ``?account_id=`` scopes every total to the
-    selected accounts (absent = whole portfolio)."""
-    return analytics.summary(session, portfolio.tenant_id, portfolio.id, account_ids=account_ids)
+    selected accounts (absent = whole portfolio). The headline market value (NAV)
+    recomputes from the LIVE intraday balances on a feed-entitled build (metron-ops#79)."""
+    prices, _ = intraday.for_portfolio(
+        session, portfolio.tenant_id, portfolio.id, feed_entitled=settings.feed_entitled, account_ids=account_ids
+    )
+    return analytics.summary(
+        session, portfolio.tenant_id, portfolio.id, account_ids=account_ids, prices=prices
+    )
+
+
+@router.get("/{portfolio_id}/intraday", response_model=IntradayStatusOut)
+def get_intraday_status(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
+    session: Session = Depends(get_session),
+) -> IntradayStatusOut:
+    """Live-valuation status for the portfolio (metron-ops#79): whether the intraday
+    overlay is currently applied, its freshness (``as_of_utc`` / ``stale``), and how many
+    held positions got a fresh quote. Drives the "intraday · ~15-min delayed · as of HH:MM"
+    label and the client poll. The poll hits ``_owned_portfolio``, which touches the
+    data-spine UI heartbeat — so an open Metron keeps the intraday producer publishing."""
+    _, m = intraday.for_portfolio(
+        session, portfolio.tenant_id, portfolio.id, feed_entitled=settings.feed_entitled, account_ids=account_ids
+    )
+    return IntradayStatusOut(
+        applied=m.applied, as_of_utc=m.as_of_utc, stale=m.stale, n_priced=m.n_priced, reason=m.reason
+    )
