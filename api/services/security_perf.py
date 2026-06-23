@@ -56,6 +56,23 @@ def _window_return(series: list[ClosePoint], start: date) -> float | None:
     return last / ref - 1.0
 
 
+def index_period_returns(
+    session: Session, symbols: Collection[str], *, as_of: date
+) -> dict[str, tuple[float | None, float | None]]:
+    """``{symbol: (ytd_pct, ltm_pct)}`` for index/ETF proxies, from cached daily closes —
+    the Markets-strip period returns, TWR-comparable to the per-account/portfolio tiles
+    (metron-ops#87). A symbol with no cached history (or none reaching back to the window
+    start) is omitted / None — never a partial-window number."""
+    hist = price_service.close_history_by_symbol(session, list(symbols))
+    ytd_start, ltm_start = _year_start(as_of), _year_ago(as_of)
+    out: dict[str, tuple[float | None, float | None]] = {}
+    for sym in symbols:
+        series = hist.get(sym)
+        if series:
+            out[sym] = (_window_return(series, ytd_start), _window_return(series, ltm_start))
+    return out
+
+
 def per_security_returns(
     session: Session,
     tenant_id: uuid.UUID,
