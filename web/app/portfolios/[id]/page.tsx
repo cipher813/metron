@@ -125,7 +125,9 @@ export default async function PortfolioPage({
       {priced ? (
         <div className="mt-6 rounded-lg border border-line p-5">
           <div className="flex items-baseline justify-between gap-2">
-            <div className="text-xs uppercase tracking-wide text-muted">Total value</div>
+            <div className="text-xs uppercase tracking-wide text-muted">
+              Total value{scoped ? ` · ${summary.n_accounts} of ${accounts.length} accounts` : ""}
+            </div>
             {/* Live-NAV refresher: recomputes the value from intraday balances every ~5 min
                 while open, and shows the delayed-as-of label when applied (metron-ops#79). */}
             <IntradayRefresher portfolioId={id} />
@@ -185,15 +187,11 @@ export default async function PortfolioPage({
         </p>
       ) : null}
 
-      {/* Accounts — management lives here (delete + tax-treatment); temporary scoping
-          (check/uncheck) lives on the Holdings page (metron-ops#77). */}
+      {/* Accounts — the hub: toggle accounts to scope the headline Total value + every page
+          below (the selection persists and the headline tracks it, so the selected-accounts
+          total matches the headline), plus management (delete + tax-treatment). */}
       <Section title="Accounts" note={scoped ? `${summary.n_accounts} of ${accounts.length} active` : undefined}>
-        <AccountPanel accounts={accounts} baseCurrency={ccy} portfolioId={id} selectable={false} deletable />
-        <p className="mt-2 text-xs text-muted">
-          <Link href={`/portfolios/${id}/holdings${navQuery}`} className="text-accent hover:underline">
-            Activate / scope accounts on the Holdings page →
-          </Link>
-        </p>
+        <AccountPanel accounts={accounts} baseCurrency={ccy} portfolioId={id} selectable deletable />
       </Section>
     </div>
   );

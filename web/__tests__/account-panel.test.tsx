@@ -106,6 +106,23 @@ describe("selection", () => {
   });
 });
 
+describe("totals track the selection (match the headline Total value)", () => {
+  it("viewing all sums every account and labels the row 'All accounts total'", () => {
+    renderPanel(); // urlAccountIds [] → whole portfolio
+    const totalRow = screen.getByText("All accounts total").parentElement!;
+    expect(totalRow).toHaveTextContent("$3,600"); // 3 × $1,200
+    expect(screen.queryByText("Selected accounts total")).not.toBeInTheDocument();
+  });
+
+  it("a scoped selection sums only the selected accounts and relabels the total", () => {
+    mocks.urlAccountIds = ["a1", "a2"]; // a3 excluded
+    renderPanel();
+    const totalRow = screen.getByText("Selected accounts total").parentElement!;
+    expect(totalRow).toHaveTextContent("$2,400"); // 2 × $1,200, NOT all three
+    expect(screen.queryByText("All accounts total")).not.toBeInTheDocument();
+  });
+});
+
 describe("delete (deletable mode — the Overview, metron-ops#77)", () => {
   it("deletes after confirm, prunes the id from the URL selection, refreshes", async () => {
     mocks.urlAccountIds = ["a1", "a2"];

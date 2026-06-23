@@ -183,7 +183,15 @@ export function AccountPanel({
       return (ix === -1 ? 99 : ix) - (iy === -1 ? 99 : iy) || x[0].localeCompare(y[0]);
     });
   }, [accounts]);
-  const grand = useMemo(() => subtotal(accounts), [accounts]);
+  // Totals reflect the ACTIVE selection, so the panel's total matches the headline
+  // "Total value" (scoped to the same selection). Viewing-all → selected = every account,
+  // so the grand total is the whole-portfolio value. Per-group subtotals scope the same
+  // way, so they always sum to the grand total.
+  const selectedAccounts = useMemo(
+    () => accounts.filter((a) => selected.has(a.account_id)),
+    [accounts, selected],
+  );
+  const grand = useMemo(() => subtotal(selectedAccounts), [selectedAccounts]);
 
   const pushSelection = useCallback(
     async (ids: string[]) => {
@@ -286,12 +294,17 @@ export function AccountPanel({
     const cost = a.cost_basis_base;
     const mv = a.market_value;
     const unreal = a.unrealized_gain;
+    // Unselected rows dim — the figures that feed the (selection-scoped) totals read bold.
+    const included = selected.has(a.account_id);
     return (
-      <li key={a.account_id} className="flex items-center gap-3 border-b border-line px-4 py-3 last:border-0">
+      <li
+        key={a.account_id}
+        className={`flex items-center gap-3 border-b border-line px-4 py-3 last:border-0 ${included ? "" : "opacity-50"}`}
+      >
         {selectable ? (
           <input
             type="checkbox"
-            checked={selected.has(a.account_id)}
+            checked={included}
             onChange={() => toggle(a.account_id)}
             aria-label={`Include ${accountLabel(a)}`}
             className="h-4 w-4 shrink-0 rounded border-line"
@@ -390,7 +403,9 @@ export function AccountPanel({
         <span className="w-6 shrink-0" aria-hidden="true" />
       </div>
       {groups.map(([label, accts]) => {
-        const sub = subtotal(accts);
+        // Subtotal scopes to the selection, like the grand total — so subtotals always
+        // sum to the grand total no matter which accounts are selected.
+        const sub = subtotal(accts.filter((a) => selected.has(a.account_id)));
         const groupAllSelected = accts.every((a) => selected.has(a.account_id));
         return (
           <div key={label}>
@@ -429,7 +444,9 @@ export function AccountPanel({
         );
       })}
       <div className="flex items-center gap-3 border-t border-line bg-surface px-4 py-2 font-medium">
-        <div className="min-w-0 flex-1 pl-7 text-[11px] uppercase tracking-wide text-muted">All accounts total</div>
+        <div className="min-w-0 flex-1 pl-7 text-[11px] uppercase tracking-wide text-muted">
+          {viewingAll ? "All accounts total" : "Selected accounts total"}
+        </div>
         <MetricCells cost={grand.cost} unreal={grand.unreal} mv={grand.mv} baseCurrency={baseCurrency} />
         <span className="w-6 shrink-0" aria-hidden="true" />
       </div>
