@@ -11,12 +11,16 @@ serving the data.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Header
+from datetime import date
+
+from fastapi import APIRouter, Depends, Header
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy.orm import Session
 
 from api import entitlements
 from api.config import settings
-from api.services import indices
+from api.db.session import get_session
+from api.services import indices, security_perf
 
 router = APIRouter(tags=["indices"])
 
@@ -34,9 +38,11 @@ class IndexQuoteOut(BaseModel):
     prev_close: float | None
     open: float | None
     change: float | None
-    change_pct: float | None
+    change_pct: float | None  # "Today" return
     session_date: str | None
     suspect: bool
+    ytd_pct: float | None = None
+    ltm_pct: float | None = None
 
 
 class IndicesOut(BaseModel):
@@ -52,6 +58,7 @@ class IndicesOut(BaseModel):
 def get_indices_intraday(
     x_preview_tier: str | None = Header(default=None),
     x_preview_feed: str | None = Header(default=None),
+    session: Session = Depends(get_session),
 ) -> IndicesOut:
     """Latest intraday levels for the major-index ETF proxies. Feed-gated: an unentitled
     deployment (the no-feed beta) gets ``available=false`` with ``required_tier`` so the
@@ -69,6 +76,17 @@ def get_indices_intraday(
         return IndicesOut(available=False, reason=feat["reason"], required_tier=feat["required_tier"])
 
     snap = indices.load_indices()
+    # Enrich each index with YTD/LTM returns from cached daily closes (metron-ops#87) — so
+    # Markets reads Today/YTD/LTM, TWR-comparable to the perf tiles. Best-effort: a symbol
+    # with no cached history keeps None.
+    if snap.available and snap.indices:
+        periods = security_perf.index_period_returns(
+            session, [q.symbol for q in snap.indices], as_of=date.today()
+        )
+        for q in snap.indices:
+            r = periods.get(q.symbol)
+            if r is not None:
+                q.ytd_pct, q.ltm_pct = r
     return IndicesOut(
         available=snap.available,
         reason=snap.reason,

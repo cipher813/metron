@@ -1024,9 +1024,12 @@ export type IndexQuote = {
   prev_close: number | null;
   open: number | null;
   change: number | null;
-  change_pct: number | null;
+  change_pct: number | null; // "Today" return
   session_date: string | null;
   suspect: boolean;
+  // Period returns from cached daily closes (metron-ops#87); null when unavailable.
+  ytd_pct: number | null;
+  ltm_pct: number | null;
 };
 
 /** SPY/QQQ/IWM intraday proxies for the S&P 500 / Nasdaq 100 / Russell 2000.

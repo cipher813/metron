@@ -48,9 +48,13 @@ class IndexQuote:
     prev_close: float | None
     open: float | None
     change: float | None       # last − prev_close (absolute), None if either is missing
-    change_pct: float | None   # change / prev_close (fraction), None if prev_close missing/0
+    change_pct: float | None   # change / prev_close (fraction), None if prev_close missing/0 — "Today"
     session_date: str | None
     suspect: bool              # producer flagged a >40% move vs prior close (bad scrape?)
+    # Period returns from cached daily closes (metron-ops#87) — enriched by the endpoint
+    # (the service is a pure S3 consumer; close history lives in the DB). None until set.
+    ytd_pct: float | None = None
+    ltm_pct: float | None = None
 
 
 @dataclass

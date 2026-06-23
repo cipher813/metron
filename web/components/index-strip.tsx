@@ -65,9 +65,24 @@ export function IndexStrip({ initial }: { initial: Indices }) {
               <span className="text-[10px] tabular-nums text-muted/70">{q.symbol}</span>
             </div>
             <div className="mt-0.5 text-lg font-semibold tabular-nums">{level(q.last)}</div>
-            <div className={`text-[11px] tabular-nums ${signClass(q.change_pct ?? 0)}`}>
-              {q.change_pct != null ? percent(q.change_pct) : "—"}
-              {q.suspect ? <span className="ml-1 text-muted" title="Quote flagged suspect (possible bad scrape)">⚠</span> : null}
+            {/* Today / YTD / LTM returns — TWR-comparable to the performance tiles below
+                (metron-ops#87). Today = change vs prior close; YTD/LTM from cached closes. */}
+            <div className="mt-1 grid grid-cols-3 gap-1 text-right">
+              {([
+                ["Today", q.change_pct],
+                ["YTD", q.ytd_pct],
+                ["LTM", q.ltm_pct],
+              ] as [string, number | null][]).map(([lbl, v], i) => (
+                <div key={lbl}>
+                  <div className="text-[9px] uppercase tracking-wide text-muted/70">{lbl}</div>
+                  <div className={`text-[11px] tabular-nums ${v != null ? signClass(v) : "text-muted"}`}>
+                    {v != null ? percent(v) : "—"}
+                    {i === 0 && q.suspect ? (
+                      <span className="ml-0.5 text-muted" title="Quote flagged suspect (possible bad scrape)">⚠</span>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         ))}
