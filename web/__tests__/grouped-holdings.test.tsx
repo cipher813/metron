@@ -68,4 +68,25 @@ describe("GroupedHoldings", () => {
     expect(screen.getByText("crypto")).toBeInTheDocument();
     expect(screen.getByText("BTC")).toBeInTheDocument();
   });
+
+  it("shows a plain 'prices as of' caption (latest close date) when the feed is fresh", () => {
+    const holdings = [h("AAPL", "equity", { last_price_date: "2026-06-23" }), h("MSFT", "equity", { last_price_date: "2026-06-24" })];
+    render(<GroupedHoldings holdings={holdings} baseCurrency="USD" priced />);
+    // Latest close date wins; no stale warning.
+    expect(screen.getByText(/Prices as of Jun 24, 2026\./)).toBeInTheDocument();
+    expect(screen.queryByText(/feed hasn’t updated/)).not.toBeInTheDocument();
+  });
+
+  it("escalates to a stale warning when any holding is flagged stale", () => {
+    const holdings = [h("AAPL", "equity", { last_price_date: "2026-06-23", last_price_stale: true })];
+    render(<GroupedHoldings holdings={holdings} baseCurrency="USD" priced />);
+    expect(screen.getByText(/Prices as of Jun 23, 2026/)).toBeInTheDocument();
+    expect(screen.getByText(/feed hasn’t updated since/)).toBeInTheDocument();
+  });
+
+  it("omits the caption on the price-free (cost-basis-only) view", () => {
+    const holdings = [h("AAPL", "equity")];
+    render(<GroupedHoldings holdings={holdings} baseCurrency="USD" priced={false} />);
+    expect(screen.queryByText(/Prices as of/)).not.toBeInTheDocument();
+  });
 });

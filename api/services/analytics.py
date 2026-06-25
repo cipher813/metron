@@ -58,6 +58,10 @@ class Holding:
     fx_rate: float | None = None              # base per 1 unit of `currency` (1.0 for USD)
     last_price: float | None = None           # native last price
     last_price_date: date | None = None
+    # True when last_price came from the live EOD close feed (cached close), False when it
+    # fell back to a broker statement snapshot. Drives the close-feed staleness check —
+    # a broker snapshot is legitimately old and must NOT read as a stalled live feed.
+    last_price_from_close: bool = False
     market_value_local: float | None = None   # native market value
     cost_basis_base: float | None = None       # cost_basis converted to base
     market_value: float | None = None          # base market value
@@ -76,6 +80,11 @@ class Holding:
     day_pct: float | None = None
     ytd_pct: float | None = None
     ltm_pct: float | None = None
+    # True when the close-fed last_price is ≥1 full trading session behind the latest
+    # session that should have printed — i.e. the upstream EOD feed has stalled. Stamped
+    # by security_perf.enrich_holdings (Holdings view only); the UI surfaces it loudly so
+    # a frozen feed never masquerades as a current price.
+    last_price_stale: bool = False
 
 
 @dataclass
@@ -522,6 +531,7 @@ def _apply_valuation(h: Holding, prices: dict, fx_rates: dict[str, float | None]
     if point is not None:
         h.last_price = point.close
         h.last_price_date = point.bar_date
+        h.last_price_from_close = True
     elif h.broker_market_price is not None:
         h.last_price = h.broker_market_price
         h.last_price_date = h.broker_as_of

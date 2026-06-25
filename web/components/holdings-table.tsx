@@ -177,8 +177,16 @@ export function HoldingsTable({
                 </td>
                 {priced ? (
                   <>
-                    <td className="px-4 py-2 text-right tabular-nums text-muted">
+                    <td
+                      className={`px-4 py-2 text-right tabular-nums ${h.last_price_stale ? "text-amber-500" : "text-muted"}`}
+                      title={
+                        h.last_price_stale && h.last_price_date
+                          ? `Stale — last close ${h.last_price_date}; the market-data feed hasn’t updated since`
+                          : undefined
+                      }
+                    >
                       {baseMoney(lastBase, h.last_price)}
+                      {h.last_price_stale ? <span className="ml-0.5" aria-hidden>⚠</span> : null}
                     </td>
                     <td className="px-4 py-2 text-right tabular-nums">
                       {baseMoney(h.market_value, h.market_value_local, moneyWhole)}

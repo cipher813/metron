@@ -97,3 +97,53 @@ def test_enrich_holdings_populates_holding_fields(db_session):
     h = next(h for h in held if h.ticker == "AAPL")
     assert h.ytd_pct == pytest.approx(0.20)
     assert h.ltm_pct == pytest.approx(0.50)
+
+
+@pytest.mark.parametrize(
+    "price_date,today,expected",
+    [
+        (date(2026, 6, 25), date(2026, 6, 25), 0),   # priced today
+        (date(2026, 6, 26), date(2026, 6, 25), 0),   # future bar → never stale
+        (date(2026, 6, 24), date(2026, 6, 25), 1),   # prior session — normal pre-close
+        (date(2026, 6, 23), date(2026, 6, 25), 2),   # one full session skipped → stale
+        (date(2026, 6, 19), date(2026, 6, 22), 1),   # Fri close read Mon — weekend skipped
+        (date(2026, 6, 19), date(2026, 6, 23), 2),   # Fri close still unrefreshed Tue → stale
+    ],
+)
+def test_sessions_behind(price_date, today, expected):
+    assert security_perf.sessions_behind(price_date, today) == expected
+
+
+# 2026-06-25 14:00 UTC = 10:00 ET on 2026-06-25 (market open).
+_NOW_0625 = datetime(2026, 6, 25, 14, 0, tzinfo=UTC)
+
+
+def test_enrich_flags_stale_close_fed_price(db_session):
+    # Latest cached close is 2026-06-23 while "today" is 2026-06-25 → a full session was
+    # skipped → the close-fed price is flagged stale (the RKLB-95.12 failure mode).
+    tid, pid = _seed(db_session, [(date(2026, 6, 23), 95.12)])
+    held = analytics.valued_holdings(db_session, tid, pid)
+    security_perf.enrich_holdings(db_session, tid, pid, held, as_of=date(2026, 6, 25), feed_entitled=False, now=_NOW_0625)
+    h = next(h for h in held if h.ticker == "AAPL")
+    assert h.last_price_from_close is True
+    assert h.last_price_stale is True
+
+
+def test_enrich_does_not_flag_fresh_close(db_session):
+    tid, pid = _seed(db_session, [(date(2026, 6, 24), 100.0)])
+    held = analytics.valued_holdings(db_session, tid, pid)
+    security_perf.enrich_holdings(db_session, tid, pid, held, as_of=date(2026, 6, 25), feed_entitled=False, now=_NOW_0625)
+    h = next(h for h in held if h.ticker == "AAPL")
+    assert h.last_price_stale is False  # 1 session behind = normal before today's close prints
+
+
+def test_enrich_does_not_flag_broker_snapshot(db_session):
+    # A broker-statement snapshot is legitimately old; it must NOT read as a stalled live
+    # feed even when its as-of date is weeks back.
+    tid, pid = _seed(db_session, _CLOSES)
+    broker = analytics.Holding(
+        ticker="BNDX", quantity=1, avg_cost=50.0, cost_basis=50.0,
+        last_price=50.0, last_price_date=date(2026, 5, 1), last_price_from_close=False,
+    )
+    security_perf.enrich_holdings(db_session, tid, pid, [broker], as_of=date(2026, 6, 25), feed_entitled=False, now=_NOW_0625)
+    assert broker.last_price_stale is False

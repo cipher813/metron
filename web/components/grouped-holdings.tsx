@@ -9,7 +9,38 @@
 
 import { HoldingsTable } from "@/components/holdings-table";
 import type { Holding } from "@/lib/api";
-import { accountingMoneyWhole, accountingPercent, moneyWhole, signClass } from "@/lib/format";
+import { accountingMoneyWhole, accountingPercent, isoDate, moneyWhole, signClass } from "@/lib/format";
+
+/** The latest close date across priced holdings + whether the close feed has stalled
+ *  (any holding flagged ≥1 full session stale by the server). */
+function priceFreshness(holdings: Holding[]): { asOf: string | null; stale: boolean } {
+  let asOf: string | null = null;
+  let stale = false;
+  for (const h of holdings) {
+    if (h.last_price_date && (asOf === null || h.last_price_date > asOf)) asOf = h.last_price_date;
+    if (h.last_price_stale) stale = true;
+  }
+  return { asOf, stale };
+}
+
+/** Always-on "prices as of {date}" caption so the EOD valuation date is never implicit;
+ *  escalates to an amber warning when the upstream close feed has skipped a session, so a
+ *  frozen feed fails loud instead of showing a stale price as if it were current. */
+function PricesAsOf({ holdings }: { holdings: Holding[] }) {
+  const { asOf, stale } = priceFreshness(holdings);
+  if (!asOf) return null;
+  if (stale) {
+    // Boxed amber alert, matching the existing warning convention (import-panel /
+    // performance) — a stalled feed should read as an alert, not a quiet footnote.
+    return (
+      <p className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+        ⚠ Prices as of {isoDate(asOf)} — the market-data feed hasn’t updated since, so
+        market values may be stale.
+      </p>
+    );
+  }
+  return <p className="text-xs text-muted">Prices as of {isoDate(asOf)}.</p>;
+}
 
 // Display order + labels for the security types classify_security_type emits.
 const TYPE_LABELS: [string, string][] = [
@@ -90,7 +121,10 @@ export function GroupedHoldings({
   // One group → the plain table (its totals row is the total); no headings needed.
   if (groups.length <= 1) {
     return (
-      <HoldingsTable holdings={holdings} baseCurrency={baseCurrency} priced={priced} portfolioId={portfolioId} />
+      <div className="space-y-2">
+        {priced ? <PricesAsOf holdings={holdings} /> : null}
+        <HoldingsTable holdings={holdings} baseCurrency={baseCurrency} priced={priced} portfolioId={portfolioId} />
+      </div>
     );
   }
 
@@ -99,6 +133,7 @@ export function GroupedHoldings({
 
   return (
     <div className="space-y-5">
+      {priced ? <PricesAsOf holdings={holdings} /> : null}
       <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 rounded-lg border border-line bg-surface px-4 py-3 text-sm">
         <span className="text-xs font-medium uppercase tracking-wide text-muted">Portfolio total</span>
         <div className="flex flex-wrap items-baseline gap-x-6 tabular-nums">
