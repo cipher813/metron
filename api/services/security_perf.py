@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from api.services import intraday
 from api.services import prices as price_service
-from portfolio_analytics.prices import ClosePoint
+from portfolio_analytics.prices import ClosePoint, HistorySource
 
 # The EOD close feed is keyed by NYSE trading days, so freshness is judged in market time.
 _MARKET_TZ = ZoneInfo("America/New_York")
@@ -88,6 +88,39 @@ def _window_return(series: list[ClosePoint], start: date) -> float | None:
     if ref is None or ref <= 0:
         return None
     return last / ref - 1.0
+
+
+# A cached close may legitimately lag the latest session over a weekend / holiday; only
+# refetch once the gap exceeds this many calendar days (mirrors performance.py's slack).
+_INDEX_COVERAGE_SLACK_DAYS = 4
+
+
+def ensure_index_history(
+    session: Session, symbols: Collection[str], *, as_of: date, source: HistorySource | None = None
+) -> None:
+    """Backfill the cached daily closes for the index/ETF proxies so the YTD **and** LTM
+    windows resolve for every proxy — not just the ones a perf-page visit happened to warm.
+
+    The Markets strip lives on the Overview, which can load without the Performance page
+    ever populating ``price_bars`` for these proxies; without this the strip shows "—" for
+    YTD/LTM. Idempotent and network-light, mirroring ``performance._ensure_benchmark_coverage``:
+    skips the fetch when the cache already spans ``[start, as_of]`` within the weekend/holiday
+    slack. ``start`` is the earlier of Jan-1 and one year ago so both windows are covered."""
+    start = min(_year_start(as_of), _year_ago(as_of))
+    for sym in symbols:
+        price_service.ensure_security(session, sym)
+    hist = price_service.close_history_by_symbol(session, list(symbols))
+    need = [
+        sym
+        for sym in symbols
+        if (
+            (series := hist.get(sym)) is None
+            or series[0].bar_date > start
+            or (as_of - series[-1].bar_date).days > _INDEX_COVERAGE_SLACK_DAYS
+        )
+    ]
+    if need:
+        price_service.backfill_prices(session, need, start, as_of, source=source)
 
 
 def index_period_returns(
