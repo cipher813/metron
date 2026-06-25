@@ -48,7 +48,7 @@ def _call(client, method: str, tenant: str, pid: str, path: str, headers: dict |
 
 @pytest.mark.parametrize(("method", "path"), ENDPOINTS)
 def test_beta_tier_deployment_gates_on_tier(client, tenant, monkeypatch, method, path):
-    """A beta-tier deployment doesn't include the wedge → upsell to pro (reason 'tier')."""
+    """A beta-tier deployment doesn't include the wedge → upsell to AI Advisor (reason 'tier')."""
     monkeypatch.setattr(settings, "tier_simulator", False)
     monkeypatch.setattr(settings, "default_tier", "beta")
     monkeypatch.setattr(settings, "feed_entitled", True)
@@ -56,13 +56,13 @@ def test_beta_tier_deployment_gates_on_tier(client, tenant, monkeypatch, method,
     body = _call(client, method, tenant, pid, path).json()
     assert body["computable"] is False
     assert body["reason"] == "tier"
-    assert body["required_tier"] == "pro"
+    assert body["required_tier"] == "personal"
 
 
 @pytest.mark.parametrize(("method", "path"), ENDPOINTS)
 def test_feed_off_deployment_gates_on_data(client, tenant, monkeypatch, method, path):
-    """Pro/personal tier INCLUDES the wedge, but with no licensed feed it isn't
-    computable → reason 'feed', still upsold to pro (the cheapest tier that bundles it)."""
+    """The full (AI-Advisor) tier INCLUDES the wedge, but with no licensed feed it isn't
+    computable → reason 'feed', still upsold to AI Advisor (the only richer tier)."""
     monkeypatch.setattr(settings, "tier_simulator", False)
     monkeypatch.setattr(settings, "default_tier", "personal")
     monkeypatch.setattr(settings, "feed_entitled", False)
@@ -70,7 +70,7 @@ def test_feed_off_deployment_gates_on_data(client, tenant, monkeypatch, method, 
     body = _call(client, method, tenant, pid, path).json()
     assert body["computable"] is False
     assert body["reason"] == "feed"
-    assert body["required_tier"] == "pro"
+    assert body["required_tier"] == "personal"
 
 
 @pytest.mark.parametrize(("method", "path"), ENDPOINTS)
@@ -113,7 +113,7 @@ def test_simulator_honors_preview_feed_off(client, tenant, monkeypatch, method, 
     body = _call(client, method, tenant, pid, path, headers={"X-Preview-Feed": "false"}).json()
     assert body["computable"] is False
     assert body["reason"] == "feed"
-    assert body["required_tier"] == "pro"
+    assert body["required_tier"] == "personal"
 
 
 @pytest.mark.parametrize(("method", "path"), ENDPOINTS)
@@ -125,7 +125,7 @@ def test_simulator_preview_beta_gates_on_tier(client, tenant, monkeypatch, metho
     body = _call(client, method, tenant, pid, path, headers={"X-Preview-Tier": "beta"}).json()
     assert body["computable"] is False
     assert body["reason"] == "tier"
-    assert body["required_tier"] == "pro"
+    assert body["required_tier"] == "personal"
 
 
 @pytest.mark.parametrize(("method", "path"), ENDPOINTS)

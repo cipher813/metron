@@ -77,8 +77,9 @@ export function Empty({ children }: { children: ReactNode }) {
   return <div className="rounded-lg border border-dashed border-line p-6 text-sm text-muted">{children}</div>;
 }
 
-// Upsell labels for a required tier (matches PortfolioNav's lock badge).
-const TIER_LABEL: Record<string, string> = { pro: "Pro", agentic: "Research+", personal: "Base" };
+// Upsell labels for a required tier (matches PortfolioNav's lock badge). Two exposed tiers
+// now (metron-ops): a beta-excluded feature upsells to the full "AI Advisor" build.
+const TIER_LABEL: Record<string, string> = { personal: "AI Advisor" };
 
 /** Full-page placeholder for a feature excluded by the active product tier / data feed.
  * Renders when a gated route is navigated to directly (the nav already hides the link).

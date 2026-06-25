@@ -1,6 +1,6 @@
 """Product-tier entitlements — the source of truth for what each Metron tier offers.
 
-Drives the **tier simulator** (owner-only preview of Beta / Pro / Research+ / Base
+Drives the **tier simulator** (owner-only preview of Beta / AI Advisor (demo)
 in the personal build) and, later, real per-tenant subscription gating in the
 multi-tenant product. Two orthogonal axes decide whether a feature is shown:
 
@@ -85,6 +85,9 @@ class Tier:
     features: frozenset[str]
 
 
+# Feature layers. _BETA and _PERSONAL are the two EXPOSED product tiers (TIERS below);
+# _PRO and _AGENTIC stay as internal composition blocks (not selectable) so the catalog's
+# layering is preserved for when packaging re-expands.
 _BETA = frozenset({
     "overview", "income", "transactions", "tax",
     "concentration", "performance", "macro", "fundamentals",
@@ -93,11 +96,13 @@ _PRO = _BETA | {"auto_sync", "benchmark", "risk", "attribution", "scenarios", "c
 _AGENTIC = _PRO | {"agentic_research"}
 _PERSONAL = _AGENTIC | {"ai_advisor", "alpha_engine"}
 
+# Two exposed options for now (metron-ops): "Beta" — everything legally releasable to the
+# public pre-SEC-approval (no advice) — and "AI Advisor (demo)" — the full product, advice
+# /signals included. required_tier reads this order (cheapest → richest), so any feature the
+# beta tier excludes upsells to "AI Advisor" — never to the internal Pro/Research layers.
 TIERS: tuple[Tier, ...] = (
-    Tier("beta", "Beta (free)", _BETA),
-    Tier("pro", "Pro", _PRO),
-    Tier("agentic", "Research / Pro+", _AGENTIC),
-    Tier("personal", "Base (personal)", _PERSONAL),
+    Tier("beta", "Beta", _BETA),
+    Tier("personal", "AI Advisor (demo)", _PERSONAL),
 )
 TIER_BY_KEY: dict[str, Tier] = {t.key: t for t in TIERS}
 TIER_ORDER: list[str] = [t.key for t in TIERS]

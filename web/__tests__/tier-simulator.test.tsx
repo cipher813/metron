@@ -17,10 +17,8 @@ function ent(overrides: Partial<Entitlements> = {}): Entitlements {
     provisioned_sources: [],
     features: [],
     tiers: [
-      { key: "beta", label: "Beta (free)" },
-      { key: "pro", label: "Pro" },
-      { key: "agentic", label: "Research / Pro+" },
-      { key: "personal", label: "Base (personal)" },
+      { key: "beta", label: "Beta" },
+      { key: "personal", label: "AI Advisor (demo)" },
     ],
     simulator: true,
     ...overrides,
@@ -40,8 +38,8 @@ describe("TierSimulator", () => {
   });
 
   it("reflects the active tier + feed state", () => {
-    render(<TierSimulator entitlements={ent({ tier: "pro", feed_enabled: false })} />);
-    expect((screen.getByLabelText("Preview tier") as HTMLSelectElement).value).toBe("pro");
+    render(<TierSimulator entitlements={ent({ tier: "beta", feed_enabled: false })} />);
+    expect((screen.getByLabelText("Preview tier") as HTMLSelectElement).value).toBe("beta");
     expect((screen.getByLabelText("Market-data feed") as HTMLInputElement).checked).toBe(false);
   });
 

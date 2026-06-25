@@ -60,7 +60,7 @@ describe("PortfolioNav", () => {
         navQuery=""
         featureStates={{
           overview: { available: true, required_tier: "beta" },
-          risk: { available: false, required_tier: "pro" },
+          risk: { available: false, required_tier: "personal" },
         }}
       />,
     );
@@ -75,14 +75,14 @@ describe("PortfolioNav", () => {
       <PortfolioNav
         portfolioId="p"
         navQuery=""
-        featureStates={{ performance: { available: false, required_tier: "pro" } }}
+        featureStates={{ performance: { available: false, required_tier: "personal" } }}
       />,
     );
     open();
     const perf = screen.getByRole("menuitem", { name: /Performance/ });
     expect(perf).toHaveAttribute("aria-disabled", "true");
     expect(perf).not.toHaveAttribute("href"); // not a link
-    expect(perf).toHaveTextContent("Pro"); // upsell badge
+    expect(perf).toHaveTextContent("AI Advisor"); // upsell badge
   });
 
   it("leaves all pages clickable when no featureStates given (ungated)", () => {

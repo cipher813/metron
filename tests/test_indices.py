@@ -102,14 +102,14 @@ class TestIndicesEndpoint:
         monkeypatch.setattr(settings, "feed_entitled", False)  # the no-feed beta
         body = client.get("/indices/intraday").json()
         assert body["available"] is False
-        assert body["reason"] == "feed" and body["required_tier"] == "pro"
+        assert body["reason"] == "feed" and body["required_tier"] == "personal"
         assert not called  # locked → never reads the (licensed) data
 
     def test_simulator_preview_feed_off_locks(self, client, monkeypatch):
         monkeypatch.setattr(indices, "_default_reader", lambda: _ART)
         monkeypatch.setattr(settings, "tier_simulator", True)
         body = client.get("/indices/intraday", headers={"X-Preview-Feed": "false"}).json()
-        assert body["available"] is False and body["required_tier"] == "pro"
+        assert body["available"] is False and body["required_tier"] == "personal"
 
     def test_entitled_but_no_data_is_unavailable_without_required_tier(self, client, monkeypatch):
         monkeypatch.setattr(indices, "_default_reader", lambda: None)

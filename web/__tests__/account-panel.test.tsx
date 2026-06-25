@@ -13,9 +13,8 @@ const mocks = vi.hoisted(() => ({
   urlAccountIds: [] as string[],
   saveAccountSelectionAction: vi.fn(async (_pid: string, _ids: string[]) => ({ ok: true, message: "" })),
   deleteAccountAction: vi.fn(async (_pid: string, _aid: string) => ({ ok: true, message: "" })),
-  updateAccountTagsAction: vi.fn(async (_pid: string, _aid: string, _patch: unknown) => ({ ok: true, message: "" })),
 }));
-const { replace, refresh, saveAccountSelectionAction, deleteAccountAction, updateAccountTagsAction } = mocks;
+const { replace, refresh, saveAccountSelectionAction, deleteAccountAction } = mocks;
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: mocks.replace, refresh: mocks.refresh }),
@@ -26,7 +25,6 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/app/portfolios/[id]/actions", () => ({
   saveAccountSelectionAction: mocks.saveAccountSelectionAction,
   deleteAccountAction: mocks.deleteAccountAction,
-  updateAccountTagsAction: mocks.updateAccountTagsAction,
 }));
 
 import { AccountPanel } from "@/components/account-panel";
@@ -66,7 +64,6 @@ beforeEach(() => {
   refresh.mockClear();
   saveAccountSelectionAction.mockClear();
   deleteAccountAction.mockClear();
-  updateAccountTagsAction.mockClear();
   mocks.urlAccountIds = [];
   vi.spyOn(window, "confirm").mockReturnValue(true);
 });
@@ -178,16 +175,17 @@ describe("mode split — selectable vs deletable (metron-ops#77)", () => {
     expect(screen.queryByLabelText("Tax treatment for Brokerage")).not.toBeInTheDocument();
   });
 
-  it("the Overview management view (deletable, not selectable) has delete + treatment, no checkboxes", () => {
+  it("the Overview management view (deletable, not selectable) has delete, no tax dropdown, no checkboxes", () => {
     renderPanel({ selectable: false, deletable: true });
     expect(screen.getByLabelText("Delete Brokerage")).toBeInTheDocument();
-    expect(screen.getByLabelText("Tax treatment for Brokerage")).toBeInTheDocument();
+    // Tax-treatment editing moved to the Settings page — no inline dropdown here.
+    expect(screen.queryByLabelText("Tax treatment for Brokerage")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Include Brokerage")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("All accounts")).not.toBeInTheDocument();
   });
 });
 
-describe("tax-status grouping + inline override", () => {
+describe("tax-status grouping", () => {
   const taxed = (id: string, name: string, treatment: string | null): Account =>
     ({ ...acct(id, name), tax_treatment: treatment, taxable: treatment !== "tax_deferred" && treatment !== "tax_exempt" }) as Account;
 
@@ -216,18 +214,14 @@ describe("tax-status grouping + inline override", () => {
     expect(screen.queryByText(/Taxable · /)).not.toBeInTheDocument();
   });
 
-  it("changing the inline tax treatment patches the account and refreshes", async () => {
-    renderPanel({ deletable: true });
-    fireEvent.change(screen.getByLabelText("Tax treatment for Brokerage"), { target: { value: "tax_deferred" } });
-    await waitFor(() =>
-      expect(updateAccountTagsAction).toHaveBeenCalledWith("p", "a1", { tax_treatment: "tax_deferred" }),
-    );
-    await waitFor(() => expect(refresh).toHaveBeenCalled());
-  });
-
-  it("selecting Auto sends a null tax_treatment (clears the override)", async () => {
-    render(<AccountPanel accounts={[taxed("a1", "Brokerage", "taxable")]} baseCurrency="USD" portfolioId="p" deletable />);
-    fireEvent.change(screen.getByLabelText("Tax treatment for Brokerage"), { target: { value: "" } });
-    await waitFor(() => expect(updateAccountTagsAction).toHaveBeenCalledWith("p", "a1", { tax_treatment: null }));
+  it("shows each account's tax status as a read-only label (editing lives on Settings)", () => {
+    const mixed = [taxed("a1", "Brokerage", "taxable"), taxed("a2", "IRA", "tax_deferred")];
+    render(<AccountPanel accounts={mixed} baseCurrency="USD" portfolioId="p" deletable />);
+    // No inline dropdown on any row — the tax treatment is editable only on the Settings page.
+    expect(screen.queryByLabelText("Tax treatment for Brokerage")).not.toBeInTheDocument();
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+    // The grouping still surfaces the category as a read-only label.
+    expect(screen.getByText("Taxable · 1")).toBeInTheDocument();
+    expect(screen.getByText("Tax-deferred · 1")).toBeInTheDocument();
   });
 });
