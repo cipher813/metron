@@ -11,17 +11,14 @@
 // so the filter survives reloads without the user re-checking boxes.
 //
 // Accounts are grouped by tax status with per-group subtotals + a grand total
-// (metron-ops#46); the 3-way tax treatment is editable inline (reuses the Settings
-// override) so a mis-derived status can be corrected without leaving the page.
+// (metron-ops#46). The tax-status label is read-only here — editing the 3-way treatment
+// lives on the Settings page (the grouping already shows the category, so the inline
+// dropdown was redundant on the Overview).
 
 import { useCallback, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import {
-  deleteAccountAction,
-  saveAccountSelectionAction,
-  updateAccountTagsAction,
-} from "@/app/portfolios/[id]/actions";
+import { deleteAccountAction, saveAccountSelectionAction } from "@/app/portfolios/[id]/actions";
 import type { Account } from "@/lib/api";
 import { accountingMoneyWhole, accountingPercent, moneyWhole, signClass } from "@/lib/format";
 
@@ -42,14 +39,6 @@ function typeLabel(a: Account): string {
 function accountLabel(a: Account): string {
   return a.nickname || a.name || a.external_id;
 }
-
-// Inline tax-treatment override (mirrors the Settings dropdown). "" = Auto (derive).
-const TAX_TREATMENTS: { value: string; label: string }[] = [
-  { value: "", label: "Auto" },
-  { value: "taxable", label: "Taxable" },
-  { value: "tax_deferred", label: "Tax-deferred" },
-  { value: "tax_exempt", label: "Tax-exempt" },
-];
 
 // Display order for the tax-status groups (anything else sorts after, alphabetically).
 const TAX_GROUP_ORDER = ["Taxable", "Tax-deferred", "Tax-exempt", "Tax-advantaged"];
@@ -170,15 +159,15 @@ export function AccountPanel({
   /** Temporary scoping: checkboxes per account + per tax-group + an All toggle, driving the
    *  ?account_id= selection. The Holdings filter view (metron-ops#77). */
   selectable?: boolean;
-  /** Account MANAGEMENT: the delete button + inline tax-treatment correction. The Overview
-   *  (metron-ops#77) — orthogonal to selectable so each page opts into the right capability. */
+  /** Account MANAGEMENT: the per-account delete button (the Overview, metron-ops#77).
+   *  Orthogonal to selectable so each page opts into the right capability. Tax-treatment
+   *  editing lives on the Settings page, not here. */
   deletable?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
   const [deleting, startDelete] = useTransition();
-  const [saving, startSave] = useTransition();
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const allIds = useMemo(() => accounts.map((a) => a.account_id), [accounts]);
@@ -290,20 +279,6 @@ export function AccountPanel({
     [portfolioId, selected, allIds, pushSelection, router],
   );
 
-  const setTreatment = useCallback(
-    (a: Account, value: string) => {
-      startSave(async () => {
-        // The Settings PATCH revalidates the portfolio path; refresh re-renders with the
-        // new derived taxable status (and re-groups the row). Fire-and-forget on failure.
-        await updateAccountTagsAction(portfolioId, a.account_id, { tax_treatment: value || null }).catch(
-          () => undefined,
-        );
-        router.refresh();
-      });
-    },
-    [portfolioId, router],
-  );
-
   if (accounts.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-line p-6 text-sm text-muted">No connected accounts.</div>
@@ -344,24 +319,7 @@ export function AccountPanel({
             </Link>
             {a.institution ? <span className="text-xs text-muted">{a.institution}</span> : null}
             <span className="text-xs text-muted">{a.currency}</span>
-            {deletable ? (
-              <select
-                value={a.tax_treatment ?? ""}
-                onChange={(e) => setTreatment(a, e.target.value)}
-                disabled={saving}
-                aria-label={`Tax treatment for ${accountLabel(a)}`}
-                title="Tax status — change if it's wrong"
-                className="rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted hover:text-ink disabled:opacity-50"
-              >
-                {TAX_TREATMENTS.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.value === "" ? typeLabel(a) : t.label}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <span className="text-[10px] uppercase tracking-wide text-muted">{typeLabel(a)}</span>
-            )}
+            <span className="text-[10px] uppercase tracking-wide text-muted">{typeLabel(a)}</span>
             {a.n_unconverted > 0 ? (
               <span className="text-[10px] text-muted" title="Some holdings excluded — no FX rate cached">
                 {a.n_unconverted} unconverted

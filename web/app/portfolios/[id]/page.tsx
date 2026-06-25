@@ -192,7 +192,8 @@ export default async function PortfolioPage({
 
       {/* Accounts — the hub: toggle accounts to scope the headline Total value + every page
           below (the selection persists and the headline tracks it, so the selected-accounts
-          total matches the headline), plus management (delete + tax-treatment). */}
+          total matches the headline), plus account deletion. Tax-treatment editing lives on
+          the Settings page (the rows here already group by tax status). */}
       <Section title="Accounts" note={scoped ? `${summary.n_accounts} of ${accounts.length} active` : undefined}>
         <AccountPanel accounts={accounts} baseCurrency={ccy} portfolioId={id} selectable deletable />
       </Section>
