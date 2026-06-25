@@ -27,8 +27,10 @@ def test_tiers_nest_cheapest_to_richest():
 
 def test_required_tier():
     assert ent.required_tier("overview") == "beta"
-    assert ent.required_tier("risk") == "pro"
-    assert ent.required_tier("agentic_research") == "agentic"
+    # Only two exposed tiers now → everything the beta tier excludes upsells to "personal"
+    # (the full AI-Advisor build), never the internal Pro/Research layers.
+    assert ent.required_tier("risk") == "personal"
+    assert ent.required_tier("agentic_research") == "personal"
     assert ent.required_tier("ai_advisor") == "personal"
     assert ent.required_tier("nonexistent") is None
 
@@ -45,37 +47,34 @@ def test_beta_no_feed_is_the_free_derivable_set():
     for k in ("overview", "income", "transactions", "tax", "concentration",
               "performance", "macro", "fundamentals"):
         assert feats[k]["available"], k
-    # The wedge isn't in the beta tier at all → reason "tier" (upsell to pro).
+    # The wedge isn't in the beta tier at all → reason "tier" (upsell to the full tier).
     for k in ("risk", "attribution", "scenarios", "benchmark", "etf_lookthrough"):
         assert not feats[k]["available"]
         assert feats[k]["reason"] == "tier"
-        assert feats[k]["required_tier"] == "pro"
+        assert feats[k]["required_tier"] == "personal"
     assert not feats["ai_advisor"]["available"]
     assert feats["ai_advisor"]["reason"] == "tier"
 
 
-def test_pro_without_feed_blocks_the_wedge_on_data_not_tier():
-    """Pro INCLUDES the wedge, but with the feed off it isn't computable — the
-    exact thing the feed toggle is meant to show."""
-    feats = _by_key(ent.resolve("pro", feed_enabled=False))
+def test_full_tier_without_feed_blocks_the_wedge_on_data_not_tier():
+    """The full (AI-Advisor) tier INCLUDES the wedge, but with the feed off it isn't
+    computable — the exact thing the feed toggle is meant to show."""
+    feats = _by_key(ent.resolve("personal", feed_enabled=False))
     for k in ("risk", "attribution", "scenarios"):
         assert feats[k]["in_tier"] and not feats[k]["computable"]
         assert not feats[k]["available"]
         assert feats[k]["reason"] == "feed"
     assert feats["benchmark"]["reason"] == "benchmark"
     assert feats["etf_lookthrough"]["reason"] == "etf_vendor"
-    # Free-derivable features still available in Pro without a feed.
+    # Free-derivable features still available without a feed.
     assert feats["performance"]["available"]
     assert feats["macro"]["available"]
-
-
-def test_pro_with_feed_unlocks_the_wedge():
-    feats = _by_key(ent.resolve("pro", feed_enabled=True))
-    for k in ("risk", "attribution", "scenarios", "benchmark", "etf_lookthrough"):
-        assert feats[k]["available"], k
-    # Personal-only overlays still excluded in Pro.
-    assert not feats["ai_advisor"]["available"]
+    # Advice overlays that need no data source are available even with no feed
+    # (agentic_research still needs the feed, so it stays unavailable).
+    assert feats["ai_advisor"]["available"]
+    assert feats["alpha_engine"]["available"]
     assert not feats["agentic_research"]["available"]
+    assert feats["agentic_research"]["reason"] == "feed"
 
 
 def test_personal_with_feed_is_everything():

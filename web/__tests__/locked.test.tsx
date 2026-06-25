@@ -10,24 +10,24 @@ import { Locked } from "@/components/ui";
 
 describe("Locked", () => {
   it("tier-excluded feature names the plan, not the feed", () => {
-    render(<Locked label="Factor risk" reason="tier" requiredTier="pro" />);
+    render(<Locked label="Factor risk" reason="tier" requiredTier="personal" />);
     expect(screen.getByRole("heading", { name: "Factor risk" })).toBeInTheDocument();
-    expect(screen.getByText(/is part of the/)).toHaveTextContent("Pro");
+    expect(screen.getByText(/is part of the/)).toHaveTextContent("AI Advisor");
     expect(screen.queryByText(/market-data feed/)).not.toBeInTheDocument();
   });
 
   it("feed-excluded feature explains the licensed market-data feed", () => {
-    render(<Locked label="Factor risk" reason="feed" requiredTier="pro" />);
-    expect(screen.getByText(/needs the licensed market-data feed/)).toHaveTextContent("Pro");
+    render(<Locked label="Factor risk" reason="feed" requiredTier="personal" />);
+    expect(screen.getByText(/needs the licensed market-data feed/)).toHaveTextContent("AI Advisor");
   });
 
-  it("maps required-tier keys to display labels (agentic → Research+)", () => {
-    render(<Locked label="Agentic quant research" reason="tier" requiredTier="agentic" />);
-    expect(screen.getByText(/is part of the/)).toHaveTextContent("Research+");
+  it("maps the required-tier key to its display label (personal → AI Advisor)", () => {
+    render(<Locked label="Agentic quant research" reason="tier" requiredTier="personal" />);
+    expect(screen.getByText(/is part of the/)).toHaveTextContent("AI Advisor");
   });
 
   it("benchmark/etf_vendor reasons are treated as data (feed) exclusions", () => {
-    render(<Locked label="ETF look-through" reason="etf_vendor" requiredTier="pro" />);
+    render(<Locked label="ETF look-through" reason="etf_vendor" requiredTier="personal" />);
     expect(screen.getByText(/needs the licensed market-data feed/)).toBeInTheDocument();
   });
 });
