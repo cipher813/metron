@@ -125,6 +125,10 @@ class HoldingOut(BaseModel):
     # ``_local`` fields are native; the bare market_value/cost_basis_base are base-currency.
     last_price: float | None = None
     last_price_date: date | None = None
+    # True when the close-fed last_price is ≥1 full trading session stale (upstream EOD
+    # feed stalled). Drives the Holdings "prices as of" staleness warning. Always False on
+    # the broker-snapshot / intraday-overlay paths (see security_perf.enrich_holdings).
+    last_price_stale: bool = False
     market_value_local: float | None = None
     cost_basis_base: float | None = None
     market_value: float | None = None

@@ -20,6 +20,10 @@ export type Holding = {
   // `_local` fields are native; market_value / cost_basis_base are base-currency.
   last_price: number | null;
   last_price_date: string | null;
+  // True when the close-fed price is ≥1 full trading session stale (upstream EOD feed
+  // stalled). Drives the Holdings "prices as of" warning. False on broker-snapshot /
+  // live-intraday paths.
+  last_price_stale: boolean;
   market_value_local: number | null;
   cost_basis_base: number | null;
   market_value: number | null;

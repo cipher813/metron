@@ -15,13 +15,47 @@ from __future__ import annotations
 import uuid
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
 from api.services import intraday
 from api.services import prices as price_service
 from portfolio_analytics.prices import ClosePoint
+
+# The EOD close feed is keyed by NYSE trading days, so freshness is judged in market time.
+_MARKET_TZ = ZoneInfo("America/New_York")
+# Flag a close-fed price as stale once it lags the latest session by this many sessions.
+# 0 = priced today, 1 = priced the prior session (normal before today's close prints), so
+# the first value that means "a whole session was skipped" is 2.
+_STALE_AFTER_SESSIONS = 2
+
+
+def sessions_behind(price_date: date, today: date) -> int:
+    """How many weekday sessions ``price_date`` lags ``today`` — weekdays strictly after
+    ``price_date`` through ``today`` inclusive (0 when priced today or in the future).
+
+    Weekday-based by design (no dependency on a NYSE holiday calendar): weekends never
+    count, so a Friday close read on Monday is 1 (fresh). The only imprecision is the
+    morning after a market holiday, where the prior session can read one session high —
+    acceptable because the always-visible "prices as of {date}" caption stays literally
+    true and over-warning is the safe direction for a freshness guard."""
+    if price_date >= today:
+        return 0
+    n, d = 0, price_date
+    while d < today:
+        d += timedelta(days=1)
+        if d.weekday() < 5:  # Mon–Fri
+            n += 1
+    return n
+
+
+def market_today(now: datetime | None = None) -> date:
+    """The current NYSE calendar date (market time), so a late-UTC-evening run doesn't
+    roll 'today' forward a day relative to the trading session."""
+    now = now or datetime.now(UTC)
+    return now.astimezone(_MARKET_TZ).date()
 
 
 @dataclass
@@ -127,18 +161,27 @@ def enrich_holdings(
     now: datetime | None = None,
 ) -> list:
     """Populate ``overnight_pct`` / ``intraday_pct`` / ``day_pct`` / ``ytd_pct`` /
-    ``ltm_pct`` on each ``analytics.Holding`` in place, then return the list."""
+    ``ltm_pct`` and the ``last_price_stale`` freshness flag on each ``analytics.Holding``
+    in place, then return the list."""
     returns = per_security_returns(
         session, tenant_id, portfolio_id, [h.ticker for h in held],
         as_of=as_of, feed_entitled=feed_entitled, account_ids=account_ids, reader=reader, now=now,
     )
+    today = market_today(now)
     for h in held:
         sr = returns.get(h.ticker)
-        if sr is None:
-            continue
-        h.overnight_pct = sr.overnight_pct
-        h.intraday_pct = sr.intraday_pct
-        h.day_pct = sr.day_pct
-        h.ytd_pct = sr.ytd_pct
-        h.ltm_pct = sr.ltm_pct
+        if sr is not None:
+            h.overnight_pct = sr.overnight_pct
+            h.intraday_pct = sr.intraday_pct
+            h.day_pct = sr.day_pct
+            h.ytd_pct = sr.ytd_pct
+            h.ltm_pct = sr.ltm_pct
+        # Stale only on the close-fed path: a broker snapshot is legitimately old and is
+        # not the upstream feed stalling. An intraday-overlaid holding carries today's
+        # bar_date, so it reads fresh (0 sessions behind).
+        h.last_price_stale = (
+            h.last_price_from_close
+            and h.last_price_date is not None
+            and sessions_behind(h.last_price_date, today) >= _STALE_AFTER_SESSIONS
+        )
     return held
