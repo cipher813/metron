@@ -11,6 +11,7 @@ serving the data.
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, Header
@@ -21,6 +22,8 @@ from api import entitlements
 from api.config import settings
 from api.db.session import get_session
 from api.services import indices, security_perf
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["indices"])
 
@@ -80,9 +83,19 @@ def get_indices_intraday(
     # Markets reads Today/YTD/LTM, TWR-comparable to the perf tiles. Best-effort: a symbol
     # with no cached history keeps None.
     if snap.available and snap.indices:
-        periods = security_perf.index_period_returns(
-            session, [q.symbol for q in snap.indices], as_of=date.today()
-        )
+        syms = [q.symbol for q in snap.indices]
+        today = date.today()
+        # Ensure this endpoint owns its own close-history coverage instead of relying on a
+        # prior Performance-page visit to have warmed price_bars for these proxies (else
+        # YTD/LTM render "—" on the Overview). Best-effort: the underlying close fetch is a
+        # SECONDARY enrichment — the primary deliverable (live levels + Today, from S3) is
+        # already built, so a fetch failure is logged (recording surface) and the period
+        # columns fall back to None rather than failing the whole strip.
+        try:
+            security_perf.ensure_index_history(session, syms, as_of=today)
+        except Exception as e:
+            logger.warning("index close-history backfill failed; YTD/LTM may be blank: %s", e)
+        periods = security_perf.index_period_returns(session, syms, as_of=today)
         for q in snap.indices:
             r = periods.get(q.symbol)
             if r is not None:

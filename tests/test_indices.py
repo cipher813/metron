@@ -9,12 +9,15 @@ the owner tier-simulator preview header.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
 from api.config import settings
-from api.services import indices
+from api.db import models
+from api.services import indices, security_perf
+from api.services import prices as price_service
+from portfolio_analytics.prices import ClosePoint
 
 _AS_OF = "2026-06-12T15:00:00Z"
 _NOW = datetime(2026, 6, 12, 15, 3, tzinfo=UTC)  # 3 min after the write — fresh
@@ -25,6 +28,7 @@ _ART = {
     "quotes": {"AAPL": {"last": 202.1, "prev_close": 201.5}},
     "indices": {
         "SPY": {"last": 605.2, "open": 603.0, "prev_close": 602.4, "session_date": "2026-06-12"},
+        "ONEQ": {"last": 101.4, "open": 100.8, "prev_close": 100.5, "session_date": "2026-06-12"},
         "QQQ": {"last": 540.1, "open": 538.5, "prev_close": 537.0, "session_date": "2026-06-12"},
         "IWM": {"last": 215.3, "open": 216.0, "prev_close": 216.5, "session_date": "2026-06-12"},
     },
@@ -36,13 +40,16 @@ class TestLoadIndices:
         snap = indices.load_indices(reader=lambda: _ART, now=_NOW)
         assert snap.available is True and snap.stale is False
         assert snap.as_of_utc == _AS_OF
-        assert [q.symbol for q in snap.indices] == ["SPY", "QQQ", "IWM"]  # display order
+        assert [q.symbol for q in snap.indices] == ["SPY", "ONEQ", "QQQ", "IWM"]  # display order
         spy = snap.indices[0]
         assert spy.label == "S&P 500"
         assert spy.change == pytest.approx(605.2 - 602.4)
         assert spy.change_pct == pytest.approx((605.2 - 602.4) / 602.4)
+        # Both Nasdaq proxies are shown with distinct labels (the Composite/100 divergence).
+        assert snap.indices[1].label == "Nasdaq Composite" and snap.indices[1].symbol == "ONEQ"
+        assert snap.indices[2].label == "Nasdaq 100" and snap.indices[2].symbol == "QQQ"
         # A down index keeps the sign — never abs/clamped.
-        iwm = snap.indices[2]
+        iwm = snap.indices[3]
         assert iwm.label == "Russell 2000" and iwm.change == pytest.approx(215.3 - 216.5)
         assert iwm.change_pct < 0
 
@@ -81,10 +88,13 @@ class TestIndicesEndpoint:
     def test_available_returns_indices_on_feed_deployment(self, client, monkeypatch):
         # Default settings: personal tier + feed entitled → indices available.
         monkeypatch.setattr(indices, "_default_reader", lambda: _ART)
+        # The YTD/LTM enrichment must not reach the network in a unit test.
+        monkeypatch.setattr("api.services.prices.fetch_close_history", lambda *a, **k: {})
         body = client.get("/indices/intraday").json()
         assert body["available"] is True and body["required_tier"] is None
-        assert [q["symbol"] for q in body["indices"]] == ["SPY", "QQQ", "IWM"]
+        assert [q["symbol"] for q in body["indices"]] == ["SPY", "ONEQ", "QQQ", "IWM"]
         assert body["indices"][0]["label"] == "S&P 500"
+        assert body["indices"][1]["label"] == "Nasdaq Composite"
 
     def test_locked_when_feed_not_entitled(self, client, monkeypatch):
         called = []
@@ -105,3 +115,60 @@ class TestIndicesEndpoint:
         monkeypatch.setattr(indices, "_default_reader", lambda: None)
         body = client.get("/indices/intraday").json()
         assert body["available"] is False and body["required_tier"] is None and body["reason"]
+
+    def test_endpoint_populates_ytd_ltm_for_all_indices_without_a_perf_visit(self, client, monkeypatch):
+        """The strip owns its own close-history coverage: YTD/LTM populate for EVERY proxy
+        on a cold DB (no prior Performance-page backfill), not just SPY."""
+        monkeypatch.setattr(indices, "_default_reader", lambda: _ART)
+        # Inject a deterministic history that reaches back past both window starts: a
+        # prior-year bar (so the LTM window resolves), a Jan-of-this-year bar (the YTD
+        # reference), and a latest bar. The coverage backfill resolves from it, no network.
+        today = date.today()
+        hist = {
+            sym: [
+                ClosePoint(date(today.year - 1, 1, 1), 100.0),
+                ClosePoint(date(today.year, 1, 2), 100.0),
+                ClosePoint(today, level),
+            ]
+            for sym, level in (("SPY", 110.0), ("ONEQ", 120.0), ("QQQ", 130.0), ("IWM", 90.0))
+        }
+        monkeypatch.setattr(
+            "api.services.prices.fetch_close_history",
+            lambda targets, start, end, *, source=None: {s: hist[s] for s in targets if s in hist},
+        )
+        body = client.get("/indices/intraday").json()
+        assert body["available"] is True
+        for q in body["indices"]:
+            assert q["ytd_pct"] is not None, f"{q['symbol']} missing YTD"
+            assert q["ltm_pct"] is not None, f"{q['symbol']} missing LTM"
+        oneq = next(q for q in body["indices"] if q["symbol"] == "ONEQ")
+        assert oneq["ytd_pct"] == pytest.approx(120.0 / 100.0 - 1.0)  # 120 vs the Jan-of-year 100
+
+
+class TestEnsureIndexHistory:
+    def test_backfills_only_uncovered_proxies(self, db_session, monkeypatch):
+        today = date(2026, 6, 25)
+        # SPY already fully covered in the cache → must NOT be refetched.
+        sid = price_service.ensure_security(db_session, "SPY")
+        for when, close in [(date(2025, 1, 1), 400.0), (date(2026, 1, 2), 400.0), (today, 480.0)]:
+            db_session.add(models.PriceBar(security_id=sid, bar_date=when, close=close, currency="USD"))
+        db_session.commit()
+
+        fetched: list[str] = []
+
+        def _fake_fetch(targets, start, end, *, source=None):
+            fetched.extend(targets)
+            return {
+                s: [ClosePoint(date(2025, 1, 1), 100.0), ClosePoint(date(2026, 1, 2), 100.0), ClosePoint(today, 120.0)]
+                for s in targets
+            }
+
+        monkeypatch.setattr("api.services.prices.fetch_close_history", _fake_fetch)
+        security_perf.ensure_index_history(db_session, ["SPY", "ONEQ", "QQQ", "IWM"], as_of=today)
+
+        # SPY skipped (already covered); the three uncovered proxies fetched once each.
+        assert "SPY" not in fetched
+        assert set(fetched) == {"ONEQ", "QQQ", "IWM"}
+        periods = security_perf.index_period_returns(db_session, ["SPY", "ONEQ"], as_of=today)
+        assert periods["SPY"][0] == pytest.approx(480.0 / 400.0 - 1.0)  # uses the seeded SPY bars
+        assert periods["ONEQ"][0] == pytest.approx(120.0 / 100.0 - 1.0)  # uses the backfilled bars

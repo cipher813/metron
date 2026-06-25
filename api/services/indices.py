@@ -1,5 +1,5 @@
-"""Major-index intraday strip for the Overview — SPY / QQQ / IWM as proxies for the
-S&P 500 / Nasdaq 100 / Russell 2000.
+"""Major-index intraday strip for the Overview — SPY / ONEQ / QQQ / IWM as proxies for
+the S&P 500 / Nasdaq Composite / Nasdaq 100 / Russell 2000.
 
 Reads the ``indices`` map from the alpha-engine-data **data spine**
 (``market_data/intraday/latest.json``, produced every 5 min during US regular trading
@@ -26,13 +26,16 @@ logger = logging.getLogger(__name__)
 
 INTRADAY_KEY = "market_data/intraday/latest.json"
 
-# Display order + the index each ETF proxy tracks (label shown in the strip).
+# Display order + the index each ETF proxy tracks (label shown in the strip). Both Nasdaq
+# proxies are shown — ONEQ tracks the broad Nasdaq Composite (the "Nasdaq" the financial
+# press headlines), QQQ the mega-cap Nasdaq-100; the two routinely diverge on breadth.
 INDEX_LABELS: dict[str, str] = {
     "SPY": "S&P 500",
+    "ONEQ": "Nasdaq Composite",
     "QQQ": "Nasdaq 100",
     "IWM": "Russell 2000",
 }
-INDEX_ORDER: list[str] = ["SPY", "QQQ", "IWM"]
+INDEX_ORDER: list[str] = ["SPY", "ONEQ", "QQQ", "IWM"]
 
 # The producer writes every 5 min during the session; flag the snapshot stale once it's
 # older than this (e.g. the market closed, or the demand-gated feed paused) so the UI can

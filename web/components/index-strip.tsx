@@ -1,7 +1,8 @@
 "use client";
 
-// The Overview "markets" strip: intraday levels for the major indices (SPY/QQQ/IWM
-// proxies for the S&P 500 / Nasdaq 100 / Russell 2000), auto-refreshed every ~5 min.
+// The Overview "markets" strip: intraday levels for the major indices (SPY/ONEQ/QQQ/IWM
+// proxies for the S&P 500 / Nasdaq Composite / Nasdaq 100 / Russell 2000), auto-refreshed
+// every ~5 min.
 //
 // Feed-gated (Pro): the server component renders this only when the `indices` feature is
 // entitled (else a compact <Locked> / nothing). First paint uses the server-fetched
@@ -55,7 +56,7 @@ export function IndexStrip({ initial }: { initial: Indices }) {
 
   return (
     <Section title="Markets" note={note}>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {data.indices.map((q) => (
           <div key={q.symbol} className="rounded-lg border border-line p-3">
             <div className="flex items-baseline justify-between gap-1">
