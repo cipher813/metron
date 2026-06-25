@@ -1211,16 +1211,22 @@ def _load_lot_flows(
     portfolio_id: uuid.UUID,
     account_ids: Collection[uuid.UUID] | None = None,
 ):
-    """Capital-in / capital-out events from the lot tables — the flow signal a
-    snapshot-sourced account (IBKR Flex / SnapTrade, no replayable trade feed) needs so its
-    contribution-driven NAV build-up isn't mis-read as investment return (metron-ops#88).
+    """Capital-in / capital-out EVENTS ``(ticker, date, quantity)`` from the lot tables — the
+    flow signal a snapshot-sourced account (IBKR Flex / SnapTrade, no replayable trade feed)
+    needs so its contribution-driven NAV build-up isn't mis-read as investment return
+    (metron-ops#88, #89).
 
-    Returns ``(opens, closes)`` as ``[(ticker, date, native_amount), ...]``:
-    ``opens`` is the cost basis of every OpenLot AND every RealizedLot (a closed lot also
-    brought capital in at its open); ``closes`` the PROCEEDS of every RealizedLot (capital
-    out at sale). Native amounts — the caller FX-converts at the event date, exactly as NAV
-    converts a native price. Scoped like ``_load_lot_timeline``; ledger (CSV/OFX) accounts
-    carry no lot rows, so they contribute nothing here (their flow is the trade ledger)."""
+    Returns ``(opens, closes)``: ``opens`` = every OpenLot AND every RealizedLot (a closed
+    lot also entered at its open); ``closes`` = every RealizedLot (the quantity leaving). The
+    caller values each at MARKET on the event date (qty × historical close × FX), exactly as
+    NAV values the position — so a composition change injects/removes precisely the NAV step
+    it causes and contributes ZERO spurious return. Valuing at market (not cost basis /
+    proceeds) is what makes this robust to lots whose recorded cost ≠ their market value at
+    the recorded open_date — transferred-in / re-imported positions and foreign-currency cost
+    scale, which otherwise fabricate huge single-period returns (the Roth IRA case, #89; a
+    same-day purchase is unaffected since market-at-open = cost). Scoped like
+    ``_load_lot_timeline``; ledger (CSV/OFX) accounts carry no lot rows (their flow is the
+    trade ledger)."""
     scope = list(account_ids) if account_ids is not None else None
 
     def _q(model, *cols):
@@ -1234,19 +1240,19 @@ def _load_lot_flows(
         return session.execute(stmt).all()
 
     opens = [
-        (t, d, float(amt))
-        for t, d, amt in _q(models.OpenLot, models.OpenLot.ticker, models.OpenLot.open_date, models.OpenLot.cost_basis)
+        (t, d, float(q))
+        for t, d, q in _q(models.OpenLot, models.OpenLot.ticker, models.OpenLot.open_date, models.OpenLot.quantity)
     ]
     opens += [
-        (t, d, float(amt))
-        for t, d, amt in _q(
-            models.RealizedLot, models.RealizedLot.ticker, models.RealizedLot.open_date, models.RealizedLot.cost_basis
+        (t, d, float(q))
+        for t, d, q in _q(
+            models.RealizedLot, models.RealizedLot.ticker, models.RealizedLot.open_date, models.RealizedLot.quantity
         )
     ]
     closes = [
-        (t, d, float(amt))
-        for t, d, amt in _q(
-            models.RealizedLot, models.RealizedLot.ticker, models.RealizedLot.close_date, models.RealizedLot.proceeds
+        (t, d, float(q))
+        for t, d, q in _q(
+            models.RealizedLot, models.RealizedLot.ticker, models.RealizedLot.close_date, models.RealizedLot.quantity
         )
     ]
     return opens, closes
@@ -1448,20 +1454,27 @@ def _reconstruct_nav_points(
         return _rate_cache[key]
 
     # Capital in/out for the lot-valued (snapshot-sourced) positions — a lot opening is the
-    # moment capital enters a no-trade-feed account, the proceeds of a closed lot the moment
-    # it leaves. Without this the flow term below is 0 for these accounts and the entire
+    # moment a position enters a no-trade-feed account, a realized lot closing the moment it
+    # leaves. Without this the flow term below is 0 for these accounts and the entire
     # contribution-driven NAV build-up reads as return (metron-ops#88). Ledger (CSV/OFX)
     # accounts keep their trade-ledger flow via ``_scoped_net_purchases`` over JUST those
     # accounts — the two sets partition by the snapshot/ledger boundary, so no double count.
     lot_opens, lot_closes = _load_lot_flows(session, tenant_id, portfolio_id, account_ids)
     ledger_account_ids = sorted({aid for aid, _t in ledger_by_account})
 
+    def _event_mv(ticker: str, qty: float, d: date) -> float:
+        """Base-currency MARKET value of ``qty`` of ``ticker`` on ``d`` — valued IDENTICALLY
+        to NAV (same close, same FX), so a lot entering/leaving moves the flow by exactly the
+        NAV step it causes → no spurious return from the composition change (#89)."""
+        px = _asof_close(history.get(ticker), d) or current_px.get(ticker)
+        return qty * px * _rate(ticker_ccy.get(ticker, "USD"), d) if px is not None else 0.0
+
     # TWR sub-periods break on every external flow: cash deposits/withdrawals AND each lot
     # open/close (so a contribution lands on a period boundary, not mid-step).
     flow_dates = (
         [t.when for _aid, t in by_account if t.type in (TxnType.DEPOSIT, TxnType.WITHDRAWAL)]
-        + [d for _t, d, _amt in lot_opens]
-        + [d for _t, d, _amt in lot_closes]
+        + [d for _t, d, _q in lot_opens]
+        + [d for _t, d, _q in lot_closes]
     )
     points: list[_NavPoint] = []
     prev: date | None = None
@@ -1493,13 +1506,13 @@ def _reconstruct_nav_points(
         cost_basis += flat_cost
         if not valued_any and flat_nav == 0:
             continue
-        # Flow = lot capital-in (cost of lots opened this sub-period) − lot capital-out
-        # (proceeds of lots closed this sub-period), both FX-converted at the event date,
+        # Flow = lot capital-in (market value of lots opened this sub-period) − lot capital-out
+        # (market value of lots closed this sub-period), valued exactly as NAV values them,
         # PLUS the trade-ledger net purchases for genuinely ledger-sourced accounts only.
         lo, hi = prev, when  # sub-period (lo, hi]; lo None on the first (ignored) point
         flow = (
-            sum(amt * _rate(ticker_ccy.get(t, "USD"), d) for t, d, amt in lot_opens if (lo is None or d > lo) and d <= hi)
-            - sum(amt * _rate(ticker_ccy.get(t, "USD"), d) for t, d, amt in lot_closes if (lo is None or d > lo) and d <= hi)
+            sum(_event_mv(t, q, d) for t, d, q in lot_opens if (lo is None or d > lo) and d <= hi)
+            - sum(_event_mv(t, q, d) for t, d, q in lot_closes if (lo is None or d > lo) and d <= hi)
             + _scoped_net_purchases(
                 session, tenant_id, portfolio_id, ledger_account_ids, after=prev, through=when
             )

@@ -87,6 +87,36 @@ def test_lot_real_gain_is_captured_not_the_contributions(db_session):
     assert _cumulative_return(db_session, tenant_id, portfolio_id, date(2025, 12, 31)) == pytest.approx(0.10, abs=0.02)
 
 
+def test_transferred_lot_cost_basis_does_not_fabricate_return(db_session):
+    """metron-ops#89: a lot whose recorded cost basis ≠ its market value at the recorded
+    open_date — a transferred-in / re-imported position, or foreign-currency cost scale —
+    must NOT fabricate a return. Valuing the lot's capital-in at MARKET (not cost) makes the
+    opening step neutral by construction. Reproduces the live Roth IRA −78.8% single-day
+    spike (a cluster of lots opened with cost ≈ 2.7× their market value)."""
+    tenant = models.Tenant(id=uuid.uuid4(), name="t")
+    portfolio = models.Portfolio(id=uuid.uuid4(), tenant_id=tenant.id, name="P")
+    db_session.add_all([tenant, portfolio])
+    db_session.commit()
+    snapshot = ConnectorSnapshot(
+        source="ibkr_flex",
+        accounts=[CanonicalAccount(number="U1", label="Roth")],
+        securities=[CanonicalSecurity(security_id="EQ:AAPL:USD", ticker="AAPL")],
+        open_lots=[
+            # Baseline lot bought at market ($100) — establishes NAV history.
+            CanonicalOpenLot(account_number="U1", security_id="EQ:AAPL:USD", ticker="AAPL",
+                             quantity=100, open_date=date(2025, 1, 6), cost_basis=10000),
+            # Transferred-in lot: 100 sh, market value at open = 100 × $100 = $10k, but recorded
+            # cost basis is $50k (bought high elsewhere / scale artifact). Cost ≠ market-at-open.
+            CanonicalOpenLot(account_number="U1", security_id="EQ:AAPL:USD", ticker="AAPL",
+                             quantity=100, open_date=date(2025, 6, 16), cost_basis=50000),
+        ],
+    )
+    persist_snapshot(db_session, tenant_id=tenant.id, portfolio_id=portfolio.id, snapshot=snapshot)
+    _seed_price_bars(db_session, "AAPL", date(2025, 1, 1), date(2025, 12, 31), lambda _d: 100.0)
+    # Flat prices the whole way; the transfer adds capital, not return → ~0% (NOT −400%).
+    assert abs(_cumulative_return(db_session, tenant.id, portfolio.id, date(2025, 12, 31))) < 0.02
+
+
 def test_lot_flow_is_nonzero_across_opening_steps(db_session):
     """The mechanism guard: per-step flow must be NON-zero on sub-periods where lots open —
     the precise failure the original ``_scoped_net_purchases``-only flow produced (always 0)."""
