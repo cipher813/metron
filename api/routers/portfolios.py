@@ -48,6 +48,7 @@ from api.services import (
 from api.services import (
     countries as countries_service,
 )
+from api.services import fundamentals as fundamentals_service
 from api.services import fx as fx_service
 from api.services import prices as price_service
 from api.services import (
@@ -56,6 +57,8 @@ from api.services import (
 from api.services import (
     tearsheet as tearsheet_service,
 )
+from api.services import technicals as technicals_service
+from api.services import valuation_medians as valuation_medians_service
 from portfolio_analytics.broker_io.csv_import import parse_transactions_csv
 from portfolio_analytics.broker_io.file_import import FileImportError, FileImportResult
 from portfolio_analytics.broker_io.ofx_import import parse_ofx
@@ -159,6 +162,52 @@ class HoldingOut(BaseModel):
     # coverage gap, never guessed.
     sector: str | None = None
     country: str | None = None
+    # Valuation / fundamentals / technicals metrics (Holdings metrics) — feed-gated
+    # (yfinance data spine). None off a feed-entitled build or on a coverage gap.
+    market_cap: float | None = None
+    pe: float | None = None
+    fwd_pe: float | None = None
+    pb: float | None = None
+    ps: float | None = None
+    ev_ebitda: float | None = None
+    peg: float | None = None
+    div_yield: float | None = None
+    rev_growth: float | None = None
+    earnings_growth: float | None = None
+    gross_margin: float | None = None
+    op_margin: float | None = None
+    roe: float | None = None
+    roa: float | None = None
+    debt_to_equity: float | None = None
+    current_ratio: float | None = None
+    beta: float | None = None
+    rsi_14: float | None = None
+    macd_hist: float | None = None
+    pct_to_ma_50: float | None = None
+    pct_to_ma_200: float | None = None
+    pct_in_52w_range: float | None = None
+    mom_20d: float | None = None
+
+
+class GroupMediansOut(BaseModel):
+    """Sector- or country-level median multiples (SP1500-broad peer benchmark) for the
+    Holdings "by sector → country" bands. None fields = the producer had no usable sample."""
+    model_config = ConfigDict(from_attributes=True)
+
+    n: int = 0
+    trailing_pe: float | None = None
+    forward_pe: float | None = None
+    price_to_book: float | None = None
+    price_to_sales: float | None = None
+    ev_ebitda: float | None = None
+    dividend_yield: float | None = None
+
+
+class ValuationMediansOut(BaseModel):
+    """Median bands restricted to the sectors/countries the portfolio actually holds."""
+    as_of: date | None = None
+    by_sector: dict[str, GroupMediansOut] = {}
+    by_country: dict[str, GroupMediansOut] = {}
 
 
 class RealizedOut(BaseModel):
@@ -1443,7 +1492,87 @@ def get_holdings(
         ov = overrides.get(h.ticker)
         h.sector = (ov.sector if ov and ov.sector else None) or sector_of.get(h.ticker)
         h.country = (ov.country if ov and ov.country else None) or country_of.get(h.ticker)
+    # Valuation / fundamentals / technicals columns (Holdings metrics) — feed-gated, same as
+    # the Day legs above: yfinance-derived spine artifacts (licensed) populate only on a
+    # feed-entitled build; off-feed each metric stays None and the table shows "—".
+    if settings.feed_entitled:
+        _enrich_metrics(session, held)
     return held
+
+
+def _enrich_metrics(session: Session, held: list[analytics.Holding]) -> None:
+    """Fill each holding's valuation/fundamentals/technicals fields from the data-spine
+    fundamentals + technicals artifacts (keyed by yf_symbol). Fail-soft: a missing artifact
+    or absent symbol leaves the fields None (coverage gap, never fabricated)."""
+    yf_map = tearsheet_service._yf_symbol_map(session, [h.ticker for h in held])
+    funds = fundamentals_service.load_fundamentals().by_symbol
+    techs = technicals_service.load_technicals().by_symbol
+    for h in held:
+        yf = yf_map.get(h.ticker, h.ticker)
+        f = funds.get(yf)
+        if f is not None:
+            h.market_cap = f.market_cap
+            h.pe = f.trailing_pe
+            h.fwd_pe = f.forward_pe
+            h.pb = f.price_to_book
+            h.ps = f.price_to_sales
+            h.ev_ebitda = f.ev_ebitda
+            h.peg = f.peg
+            h.div_yield = f.dividend_yield
+            h.rev_growth = f.revenue_growth
+            h.earnings_growth = f.earnings_growth
+            h.gross_margin = f.gross_margins
+            h.op_margin = f.operating_margins
+            h.roe = f.roe
+            h.roa = f.roa
+            h.debt_to_equity = f.debt_to_equity
+            h.current_ratio = f.current_ratio
+            h.beta = f.beta
+        t = techs.get(yf)
+        if t is not None:
+            h.rsi_14 = t.rsi_14
+            h.macd_hist = t.macd_hist
+            h.pct_to_ma_50 = t.pct_to_ma_50
+            h.pct_to_ma_200 = t.pct_to_ma_200
+            h.pct_in_52w_range = t.pct_in_52w_range
+            h.mom_20d = t.mom_20d
+
+
+@router.get("/{portfolio_id}/valuation-medians", response_model=ValuationMediansOut)
+def get_valuation_medians(
+    portfolio: models.Portfolio = Depends(_owned_portfolio),
+    account_ids: set[uuid.UUID] | None = Depends(_selected_account_ids),
+    session: Session = Depends(get_session),
+) -> ValuationMediansOut:
+    """SP1500-broad sector & country median multiples, restricted to the sectors/countries
+    the portfolio actually holds — the peer benchmark for the Holdings "by sector → country"
+    median bands. Feed-gated (yfinance-derived spine): empty off a feed-entitled build."""
+    if not settings.feed_entitled:
+        return ValuationMediansOut()
+    held = analytics.valued_holdings(session, portfolio.tenant_id, portfolio.id, account_ids=account_ids)
+    tickers = [h.ticker for h in held]
+    # Resolve each holding's sector/country exactly as get_holdings does (overrides win), so
+    # the band keys match the rows' grouping.
+    sectors_service.ensure_sectors(session, tickers)
+    countries_service.ensure_countries(session, tickers)
+    sector_of = sectors_service.sectors_by_symbol(session, tickers)
+    country_of = countries_service.countries_by_symbol(session, tickers)
+    overrides = classifications_service.overrides_by_symbol(session, portfolio.tenant_id, tickers)
+    present_sectors, present_countries = set(), set()
+    for h in held:
+        ov = overrides.get(h.ticker)
+        s = (ov.sector if ov and ov.sector else None) or sector_of.get(h.ticker)
+        c = (ov.country if ov and ov.country else None) or country_of.get(h.ticker)
+        if s:
+            present_sectors.add(s)
+        if c:
+            present_countries.add(c)
+    snap = valuation_medians_service.load_valuation_medians()
+    return ValuationMediansOut(
+        as_of=snap.as_of,
+        by_sector={k: v for k, v in snap.by_sector.items() if k in present_sectors},
+        by_country={k: v for k, v in snap.by_country.items() if k in present_countries},
+    )
 
 
 def _taxable_scoped(
