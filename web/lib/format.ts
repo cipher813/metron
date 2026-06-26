@@ -90,3 +90,27 @@ export function signClass(value: number): string {
   if (value < 0) return "text-negative";
   return "text-muted";
 }
+
+/** A valuation multiple (P/E, P/B, EV/EBITDA): "30.2×". */
+export function multiple(value: number): string {
+  return `${value.toFixed(1)}×`;
+}
+
+/** Market cap in human units: "$3.0T" / "$450.2B" / "$12.3B" / "$840.0M". */
+export function marketCapShort(value: number, currency = "USD"): string {
+  const abs = Math.abs(value);
+  const [div, suffix] = abs >= 1e12 ? [1e12, "T"] : abs >= 1e9 ? [1e9, "B"] : abs >= 1e6 ? [1e6, "M"] : [1e3, "K"];
+  const sym = currency === "USD" ? "$" : "";
+  return `${sym}${(value / div).toFixed(1)}${suffix}`;
+}
+
+/** A plain ratio/level (current ratio, beta, RSI): fixed decimals, no unit. */
+export function decimal(value: number, places = 2): string {
+  return value.toFixed(places);
+}
+
+/** Unsigned percentage from a decimal ratio (0.45 → "45.0%") — for margins/yield/range
+ * where the sign isn't meaningful (unlike `percent`, which is signed for growth/returns). */
+export function pct1(ratio: number): string {
+  return `${(ratio * 100).toFixed(1)}%`;
+}

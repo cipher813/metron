@@ -1,9 +1,9 @@
-import { acctParams, getAccounts, getHoldings, getHoldingsPerformanceSeries, getIntradayLegs, getSummary, getToday, MetronApiError, type HoldingsPerfSeries, type IntradayLegHistory, type Today } from "@/lib/api";
+import { acctParams, getAccounts, getHoldings, getHoldingsPerformanceSeries, getIntradayLegs, getSummary, getToday, getValuationMedians, MetronApiError, type HoldingsPerfSeries, type IntradayLegHistory, type Today, type ValuationMedians } from "@/lib/api";
 import { Empty, Section, StatCard } from "@/components/ui";
 import { accountingMoneyWhole, percent, signClass } from "@/lib/format";
 import { AccountPanel } from "@/components/account-panel";
 import { AllocationBreakdown } from "@/components/allocation-breakdown";
-import { GroupedHoldings } from "@/components/grouped-holdings";
+import { HoldingsView } from "@/components/holdings-view";
 import { HoldingsPerfChart } from "@/components/holdings-perf-chart";
 import { TopBottomPerformers } from "@/components/top-bottom-performers";
 import { RefreshPrices } from "@/components/refresh-prices";
@@ -49,13 +49,17 @@ export default async function HoldingsPage({
   let summary, holdings, accounts;
   let perfSeries: HoldingsPerfSeries | null = null;
   let today: Today | null = null;
+  let medians: ValuationMedians | null = null;
   try {
-    [summary, holdings, accounts, perfSeries, today] = await Promise.all([
+    [summary, holdings, accounts, perfSeries, today, medians] = await Promise.all([
       getSummary(tenantId, id, accountIds),
       getHoldings(tenantId, id, accountIds),
       getAccounts(tenantId, id),
       getHoldingsPerformanceSeries(tenantId, id, accountIds).catch((): HoldingsPerfSeries | null => null),
       getToday(tenantId, id, accountIds).catch((): Today | null => null),
+      // SP1500-broad sector/country median bands for the "by sector → country" view —
+      // best-effort + feed-gated (empty off a feed-entitled build).
+      getValuationMedians(tenantId, id, accountIds).catch((): ValuationMedians | null => null),
     ]);
   } catch (e) {
     if (e instanceof MetronApiError && e.status === 404) {
@@ -180,7 +184,7 @@ export default async function HoldingsPage({
         {holdings.length === 0 ? (
           <Empty>No open positions.</Empty>
         ) : (
-          <GroupedHoldings holdings={holdings} baseCurrency={ccy} priced={priced} portfolioId={id} />
+          <HoldingsView holdings={holdings} baseCurrency={ccy} priced={priced} medians={medians} portfolioId={id} />
         )}
       </Section>
     </div>
