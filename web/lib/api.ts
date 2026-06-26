@@ -44,6 +44,56 @@ export type Holding = {
   // domicile; country drives the US-vs-international split. null = unclassified gap.
   sector: string | null;
   country: string | null;
+  // Valuation / fundamentals / technicals metrics for the Holdings table columns —
+  // feed-gated (yfinance data spine). null off a feed-entitled build or on a coverage gap.
+  market_cap: number | null;
+  pe: number | null;
+  fwd_pe: number | null;
+  pb: number | null;
+  ps: number | null;
+  ev_ebitda: number | null;
+  peg: number | null;
+  div_yield: number | null; // fraction
+  rev_growth: number | null; // fraction
+  earnings_growth: number | null; // fraction
+  gross_margin: number | null; // fraction
+  op_margin: number | null; // fraction
+  roe: number | null; // fraction
+  roa: number | null; // fraction
+  beta: number | null;
+  // Balance sheet (absolute $ + leverage/liquidity).
+  cash: number | null; // total cash ($)
+  debt: number | null; // total debt ($)
+  net_debt: number | null; // debt − cash ($)
+  debt_to_equity: number | null; // yfinance raw (a percentage, e.g. 47.2)
+  net_debt_to_ebitda: number | null; // (debt − cash) / EBITDA
+  current_ratio: number | null;
+  quick_ratio: number | null;
+  fcf: number | null; // free cash flow ($)
+  rsi_14: number | null;
+  macd_hist: number | null;
+  pct_to_ma_50: number | null; // fraction
+  pct_to_ma_200: number | null; // fraction
+  pct_in_52w_range: number | null; // 0-1
+  mom_20d: number | null; // fraction
+};
+
+// Sector- / country-level median multiples (SP1500-broad peer benchmark) for the Holdings
+// "by sector → country" bands. Fields null when the producer had no usable sample.
+export type GroupMedians = {
+  n: number;
+  trailing_pe: number | null;
+  forward_pe: number | null;
+  price_to_book: number | null;
+  price_to_sales: number | null;
+  ev_ebitda: number | null;
+  dividend_yield: number | null; // fraction
+};
+
+export type ValuationMedians = {
+  as_of: string | null;
+  by_sector: Record<string, GroupMedians>;
+  by_country: Record<string, GroupMedians>;
 };
 
 export type IncomeYear = {
@@ -394,6 +444,10 @@ export const getSummary = (tenantId: string, id: string, accountIds?: string[]) 
   get<Summary>(tenantId, `/portfolios/${id}/summary${acctParams(accountIds)}`);
 export const getHoldings = (tenantId: string, id: string, accountIds?: string[]) =>
   get<Holding[]>(tenantId, `/portfolios/${id}/holdings${acctParams(accountIds)}`);
+// SP1500-broad sector & country median multiples for the Holdings "by sector → country"
+// bands, restricted to the sectors/countries this portfolio holds. Empty off-feed.
+export const getValuationMedians = (tenantId: string, id: string, accountIds?: string[]) =>
+  get<ValuationMedians>(tenantId, `/portfolios/${id}/valuation-medians${acctParams(accountIds)}`);
 // account selection + the taxable-only flag (the Tax/Activity views default taxable —
 // tax-advantaged accounts have no taxable events; metron-ops#48).
 function activityQuery(accountIds?: string[], taxableOnly?: boolean): string {

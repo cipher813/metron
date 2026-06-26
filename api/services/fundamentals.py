@@ -29,14 +29,20 @@ class TickerFundamentals:
     # Valuation multiples
     trailing_pe: float | None
     forward_pe: float | None
+    price_to_book: float | None    # yfinance priceToBook (artifact v2)
+    price_to_sales: float | None   # yfinance priceToSalesTrailing12Months (artifact v2)
     peg: float | None              # derived: trailing P/E ÷ (earnings growth %)
     ev_ebitda: float | None
     earnings_growth: float | None  # fraction
     revenue_growth: float | None   # fraction
-    # Balance-sheet ratios
+    # Balance-sheet ratios + absolute balances ($, artifact v3)
     debt_to_equity: float | None   # raw artifact value (yfinance: a percentage, e.g. 47.2)
     current_ratio: float | None
     quick_ratio: float | None
+    total_debt: float | None       # $ (yfinance totalDebt)
+    total_cash: float | None       # $ (yfinance totalCash)
+    ebitda: float | None           # $ (yfinance ebitda) — for net-debt/EBITDA leverage
+    free_cashflow: float | None    # $ (yfinance freeCashflow)
     roe: float | None              # fraction
     roa: float | None              # fraction
     gross_margins: float | None    # fraction
@@ -91,6 +97,8 @@ def _parse(yf_symbol: str, d: dict) -> TickerFundamentals:
         beta=_f(d, "beta"),
         trailing_pe=trailing_pe,
         forward_pe=_f(d, "forwardPE"),
+        price_to_book=_f(d, "priceToBook"),
+        price_to_sales=_f(d, "priceToSalesTrailing12Months"),
         peg=peg,
         ev_ebitda=_f(d, "enterpriseToEbitda"),
         earnings_growth=earnings_growth,
@@ -98,6 +106,10 @@ def _parse(yf_symbol: str, d: dict) -> TickerFundamentals:
         debt_to_equity=_f(d, "debtToEquity"),
         current_ratio=_f(d, "currentRatio"),
         quick_ratio=_f(d, "quickRatio"),
+        total_debt=_f(d, "totalDebt"),
+        total_cash=_f(d, "totalCash"),
+        ebitda=_f(d, "ebitda"),
+        free_cashflow=_f(d, "freeCashflow"),
         roe=_f(d, "returnOnEquity"),
         roa=_f(d, "returnOnAssets"),
         gross_margins=_f(d, "grossMargins"),

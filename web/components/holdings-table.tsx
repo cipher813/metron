@@ -5,12 +5,31 @@
 // column carries each holding's native currency and the cached rate used for
 // conversion. When a foreign holding has no cached FX rate the native value is
 // shown muted with a `*` (never silently treated as base currency).
+//
+// On a feed-entitled build the priced view adds three column bands — Valuation /
+// Fundamentals / Technicals — under a grouped two-row header (Holdings metrics). The
+// table gets wide, so the ticker column sticks left and a horizontal scrollbar is
+// mirrored at both the top and bottom of the table. Each metric is null off-feed or on a
+// coverage gap → "—" (never fabricated).
 
-import { useMemo, useState, useTransition, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { Holding } from "@/lib/api";
-import { accountingMoneyWhole, accountingPercent, fxRate, money, moneyWhole, quantity, signClass } from "@/lib/format";
+import {
+  accountingMoneyWhole,
+  accountingPercent,
+  decimal,
+  fxRate,
+  marketCapShort,
+  money,
+  moneyWhole,
+  multiple,
+  pct1,
+  percent,
+  quantity,
+  signClass,
+} from "@/lib/format";
 import { setSecurityClassificationAction, setSecurityLabelAction } from "@/app/portfolios/[id]/actions";
 
 // Canonical option lists for the inline classification override (matches the data-spine
@@ -74,6 +93,8 @@ type Column = {
   value: (h: Holding) => SortValue;
 };
 
+// Position columns — kept as bespoke cells (FX fallback, inline editors, staleness). These
+// drive the header + sort; the body renders them explicitly below.
 const COLUMNS: Column[] = [
   { key: "ticker", label: "Ticker", value: (h) => h.ticker },
   { key: "fx", label: "FX", value: (h) => h.currency },
@@ -112,6 +133,74 @@ const COLUMNS: Column[] = [
   { key: "ltm_pct", label: "LTM", pricedOnly: true, defaultDesc: true, value: (h) => h.ltm_pct },
 ];
 
+type MetricGroup = "Valuation" | "Fundamentals" | "Balance Sheet" | "Technicals";
+
+type MetricColumn = {
+  key: string;
+  label: string;
+  group: MetricGroup;
+  value: (h: Holding) => number | null;
+  /** Cell content from the non-null value (callers never see null — "—" is rendered). */
+  render: (v: number, baseCurrency: string) => string;
+  /** Color the cell by the value's sign (growth / returns / momentum). */
+  signed?: boolean;
+  title?: string;
+};
+
+// Valuation / Fundamentals / Technicals — declarative columns sourced from the data-spine
+// fundamentals + technicals artifacts (Holdings metrics). Shown only in the priced view;
+// each is null off a feed-entitled build → "—".
+const METRIC_COLUMNS: MetricColumn[] = [
+  // ── Valuation ──
+  { key: "market_cap", label: "Mkt Cap", group: "Valuation", value: (h) => h.market_cap, render: (v, base) => marketCapShort(v, base) },
+  { key: "pe", label: "P/E", group: "Valuation", value: (h) => h.pe, render: (v) => multiple(v) },
+  { key: "fwd_pe", label: "Fwd P/E", group: "Valuation", value: (h) => h.fwd_pe, render: (v) => multiple(v) },
+  { key: "pb", label: "P/B", group: "Valuation", value: (h) => h.pb, render: (v) => multiple(v) },
+  { key: "ps", label: "P/S", group: "Valuation", value: (h) => h.ps, render: (v) => multiple(v) },
+  { key: "ev_ebitda", label: "EV/EBITDA", group: "Valuation", value: (h) => h.ev_ebitda, render: (v) => multiple(v) },
+  { key: "peg", label: "PEG", group: "Valuation", value: (h) => h.peg, render: (v) => decimal(v, 2) },
+  { key: "div_yield", label: "Div Yld", group: "Valuation", value: (h) => h.div_yield, render: (v) => pct1(v) },
+  // ── Fundamentals ──
+  { key: "rev_growth", label: "Rev Gr", group: "Fundamentals", value: (h) => h.rev_growth, render: (v) => percent(v), signed: true },
+  { key: "earnings_growth", label: "EPS Gr", group: "Fundamentals", value: (h) => h.earnings_growth, render: (v) => percent(v), signed: true },
+  { key: "gross_margin", label: "Gross M", group: "Fundamentals", value: (h) => h.gross_margin, render: (v) => pct1(v) },
+  { key: "op_margin", label: "Op M", group: "Fundamentals", value: (h) => h.op_margin, render: (v) => pct1(v) },
+  { key: "roe", label: "ROE", group: "Fundamentals", value: (h) => h.roe, render: (v) => percent(v), signed: true },
+  { key: "roa", label: "ROA", group: "Fundamentals", value: (h) => h.roa, render: (v) => percent(v), signed: true },
+  { key: "beta", label: "Beta", group: "Fundamentals", value: (h) => h.beta, render: (v) => decimal(v, 2) },
+  // ── Balance Sheet (absolute balances + leverage/liquidity) ──
+  { key: "cash", label: "Cash", group: "Balance Sheet", value: (h) => h.cash, render: (v, base) => marketCapShort(v, base), title: "Total cash & equivalents" },
+  { key: "debt", label: "Debt", group: "Balance Sheet", value: (h) => h.debt, render: (v, base) => marketCapShort(v, base), title: "Total debt" },
+  { key: "net_debt", label: "Net Debt", group: "Balance Sheet", value: (h) => h.net_debt, render: (v, base) => marketCapShort(v, base), title: "Total debt − total cash (negative = net cash)" },
+  { key: "debt_to_equity", label: "D/E", group: "Balance Sheet", value: (h) => h.debt_to_equity, render: (v) => decimal(v / 100, 2), title: "Debt / equity (ratio)" },
+  { key: "net_debt_to_ebitda", label: "ND/EBITDA", group: "Balance Sheet", value: (h) => h.net_debt_to_ebitda, render: (v) => decimal(v, 2), title: "Net debt / EBITDA — leverage" },
+  { key: "current_ratio", label: "Cur R", group: "Balance Sheet", value: (h) => h.current_ratio, render: (v) => decimal(v, 2), title: "Current ratio (liquidity)" },
+  { key: "quick_ratio", label: "Quick R", group: "Balance Sheet", value: (h) => h.quick_ratio, render: (v) => decimal(v, 2), title: "Quick ratio (acid-test liquidity)" },
+  { key: "fcf", label: "FCF", group: "Balance Sheet", value: (h) => h.fcf, render: (v, base) => marketCapShort(v, base), signed: true, title: "Free cash flow (TTM)" },
+  // ── Technicals ──
+  { key: "rsi_14", label: "RSI", group: "Technicals", value: (h) => h.rsi_14, render: (v) => decimal(v, 0), title: "Wilder RSI(14)" },
+  { key: "macd_hist", label: "MACD", group: "Technicals", value: (h) => h.macd_hist, render: (v) => decimal(v, 2), signed: true, title: "MACD histogram (line − signal)" },
+  { key: "pct_to_ma_50", label: "vs 50d", group: "Technicals", value: (h) => h.pct_to_ma_50, render: (v) => percent(v), signed: true, title: "% above/below the 50-day moving average" },
+  { key: "pct_to_ma_200", label: "vs 200d", group: "Technicals", value: (h) => h.pct_to_ma_200, render: (v) => percent(v), signed: true, title: "% above/below the 200-day moving average" },
+  { key: "pct_in_52w_range", label: "52w Rng", group: "Technicals", value: (h) => h.pct_in_52w_range, render: (v) => pct1(v), title: "Position within the 52-week low–high range" },
+  { key: "mom_20d", label: "Mom 20d", group: "Technicals", value: (h) => h.mom_20d, render: (v) => percent(v), signed: true, title: "20-session price momentum" },
+];
+
+const METRIC_GROUP_ORDER: MetricGroup[] = ["Valuation", "Fundamentals", "Balance Sheet", "Technicals"];
+
+// Lookup over EVERY sortable column (position + metric), so header clicks sort uniformly.
+const SORT_BY_KEY = new Map<string, (h: Holding) => SortValue>([
+  ...COLUMNS.map((c) => [c.key, c.value] as const),
+  ...METRIC_COLUMNS.map((c) => [c.key, c.value] as const),
+]);
+const DESC_BY_DEFAULT = new Set<string>([
+  ...COLUMNS.filter((c) => c.defaultDesc).map((c) => c.key),
+  ...METRIC_COLUMNS.map((c) => c.key), // all metrics open descending
+]);
+
+// Sticky first (ticker) column — stays put while the wide metric bands scroll right.
+const STICKY = "sticky left-0 z-10";
+
 export function HoldingsTable({
   holdings,
   baseCurrency,
@@ -124,16 +213,19 @@ export function HoldingsTable({
   /** When set, the Ticker cell exposes an inline alias editor (metron-ops#47). */
   portfolioId?: string;
 }) {
-  const columns = priced ? COLUMNS : COLUMNS.filter((c) => !c.pricedOnly);
+  const positionColumns = priced ? COLUMNS : COLUMNS.filter((c) => !c.pricedOnly);
+  // Metric bands only in the priced view (they're feed-gated; the cost-basis-only view
+  // stays exactly as before).
+  const showMetrics = priced;
   const [sort, setSort] = useState<{ key: string; desc: boolean } | null>(null);
 
   const sorted = useMemo(() => {
     if (!sort) return holdings;
-    const col = COLUMNS.find((c) => c.key === sort.key);
-    if (!col) return holdings;
+    const accessor = SORT_BY_KEY.get(sort.key);
+    if (!accessor) return holdings;
     return [...holdings].sort((a, b) => {
-      const va = col.value(a);
-      const vb = col.value(b);
+      const va = accessor(a);
+      const vb = accessor(b);
       if (va == null && vb == null) return 0;
       if (va == null) return 1; // nulls last in either direction
       if (vb == null) return -1;
@@ -145,8 +237,8 @@ export function HoldingsTable({
     });
   }, [holdings, sort]);
 
-  function toggle(col: Column) {
-    setSort((s) => (s?.key === col.key ? { key: col.key, desc: !s.desc } : { key: col.key, desc: !!col.defaultDesc }));
+  function toggle(key: string) {
+    setSort((s) => (s?.key === key ? { key, desc: !s.desc } : { key, desc: DESC_BY_DEFAULT.has(key) }));
   }
 
   // Portfolio totals over the base-currency aggregates. A foreign holding with no
@@ -168,29 +260,69 @@ export function HoldingsTable({
         if (h.unrealized_gain != null) unreal += h.unrealized_gain;
       }
     }
-    // Aggregate unrealized % is the gain over the summed cost basis (portfolio return).
     const unrealPct = priced && cost !== 0 ? unreal / cost : null;
     return { cost, mv, unreal, unrealPct, excluded };
   }, [holdings, baseCurrency, priced]);
 
+  // Header sort-button (shared by the position + metric column headers).
+  const SortTh = ({ colKey, label, title }: { colKey: string; label: string; title?: string }) => (
+    <button
+      type="button"
+      onClick={() => toggle(colKey)}
+      className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-ink"
+      title={title ?? `Sort by ${label}`}
+    >
+      {label}
+      <span className={sort?.key === colKey ? "" : "invisible"}>{sort?.desc ? "▼" : "▲"}</span>
+    </button>
+  );
+
+  const metricsByGroup = METRIC_GROUP_ORDER.map(
+    (g) => [g, METRIC_COLUMNS.filter((c) => c.group === g)] as const,
+  );
+
   return (
-    <div className="overflow-x-auto rounded-lg border border-line">
+    <DualScroll deps={`${positionColumns.length}:${holdings.length}:${showMetrics}`}>
       <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-line bg-surface text-left text-xs uppercase tracking-wide text-muted">
-            {columns.map((col, i) => (
-              <th key={col.key} className={`px-4 py-2 font-medium ${i === 0 ? "" : "text-right"}`}>
-                <button
-                  type="button"
-                  onClick={() => toggle(col)}
-                  className="inline-flex items-center gap-1 uppercase tracking-wide hover:text-ink"
-                  title={`Sort by ${col.label}`}
+        <thead className="sticky top-0 z-20">
+          {showMetrics ? (
+            // Group-band row: spans Position + each metric band.
+            <tr className="border-b border-line bg-surface text-left text-[10px] uppercase tracking-wider text-muted">
+              <th colSpan={positionColumns.length} className={`${STICKY} bg-surface px-4 py-1.5 font-semibold`}>
+                Position
+              </th>
+              {metricsByGroup.map(([group, cols]) => (
+                <th
+                  key={group}
+                  colSpan={cols.length}
+                  className="border-l border-line px-3 py-1.5 text-center font-semibold text-accent"
                 >
-                  {col.label}
-                  <span className={sort?.key === col.key ? "" : "invisible"}>{sort?.desc ? "▼" : "▲"}</span>
-                </button>
+                  {group}
+                </th>
+              ))}
+            </tr>
+          ) : null}
+          <tr className="border-b border-line bg-surface text-left text-xs uppercase tracking-wide text-muted">
+            {positionColumns.map((col, i) => (
+              <th
+                key={col.key}
+                className={`px-4 py-2 font-medium ${i === 0 ? `${STICKY} bg-surface` : "text-right"}`}
+              >
+                <SortTh colKey={col.key} label={col.label} />
               </th>
             ))}
+            {showMetrics
+              ? metricsByGroup.map(([, cols]) =>
+                  cols.map((col, j) => (
+                    <th
+                      key={col.key}
+                      className={`px-3 py-2 text-right font-medium ${j === 0 ? "border-l border-line" : ""}`}
+                    >
+                      <SortTh colKey={col.key} label={col.label} title={col.title} />
+                    </th>
+                  )),
+                )
+              : null}
           </tr>
         </thead>
         <tbody>
@@ -217,7 +349,7 @@ export function HoldingsTable({
             const lastBase = h.last_price != null && h.fx_rate != null ? h.last_price * h.fx_rate : null;
             return (
               <tr key={h.ticker} className="border-b border-line last:border-0">
-                <td className="px-4 py-2 font-medium">
+                <td className={`${STICKY} bg-paper px-4 py-2 font-medium`}>
                   <TickerCell h={h} portfolioId={portfolioId} />
                 </td>
                 <td className="px-4 py-2 text-right text-muted">
@@ -270,6 +402,23 @@ export function HoldingsTable({
                     </td>
                   </>
                 ) : null}
+                {showMetrics
+                  ? metricsByGroup.map(([, cols]) =>
+                      cols.map((col, j) => {
+                        const v = col.value(h);
+                        const tone = v == null ? "text-muted" : col.signed ? signClass(v) : "";
+                        return (
+                          <td
+                            key={col.key}
+                            className={`px-3 py-2 text-right tabular-nums ${j === 0 ? "border-l border-line" : ""} ${tone}`}
+                            title={col.title}
+                          >
+                            {v == null ? "—" : col.render(v, baseCurrency)}
+                          </td>
+                        );
+                      }),
+                    )
+                  : null}
               </tr>
             );
           })}
@@ -277,7 +426,10 @@ export function HoldingsTable({
         {holdings.length > 0 ? (
           <tfoot>
             <tr className="border-t border-line bg-surface font-medium">
-              <td className="px-4 py-2" title={totals.excluded > 0 ? `${totals.excluded} holding(s) excluded — no ${baseCurrency} FX rate cached` : undefined}>
+              <td
+                className={`${STICKY} bg-surface px-4 py-2`}
+                title={totals.excluded > 0 ? `${totals.excluded} holding(s) excluded — no ${baseCurrency} FX rate cached` : undefined}
+              >
                 Total{totals.excluded > 0 ? "*" : ""}
               </td>
               <td className="px-4 py-2" />
@@ -303,10 +455,64 @@ export function HoldingsTable({
                   <td className="px-4 py-2" />
                 </>
               ) : null}
+              {/* Metric columns are per-security — no portfolio total. */}
+              {showMetrics ? METRIC_COLUMNS.map((c) => <td key={c.key} className="px-3 py-2" />) : null}
             </tr>
           </tfoot>
         ) : null}
       </table>
+    </DualScroll>
+  );
+}
+
+/** Wraps a wide table in a single horizontal scroll container and mirrors its scrollbar at
+ *  the TOP as well, so a long table can be scrolled horizontally from either end without
+ *  hunting for the bottom bar. The two bars stay in sync; the top bar hides when the table
+ *  fits (no overflow). `deps` forces a re-measure when the column/row set changes. */
+function DualScroll({ children, deps }: { children: ReactNode; deps: string }) {
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const topRef = useRef<HTMLDivElement>(null);
+  const [scrollW, setScrollW] = useState(0);
+  const [clientW, setClientW] = useState(0);
+
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const measure = () => {
+      setScrollW(el.scrollWidth);
+      setClientW(el.clientWidth);
+    };
+    measure();
+    // ResizeObserver is absent in some test/SSR environments — the initial measure above
+    // still wires the mirror bar; we only skip live re-measure on resize.
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [deps]);
+
+  const overflows = scrollW > clientW + 1;
+  const syncFromTop = () => {
+    if (bodyRef.current && topRef.current) bodyRef.current.scrollLeft = topRef.current.scrollLeft;
+  };
+  const syncFromBody = () => {
+    if (bodyRef.current && topRef.current) topRef.current.scrollLeft = bodyRef.current.scrollLeft;
+  };
+
+  return (
+    <div>
+      {/* Top mirror scrollbar — only when the table actually overflows horizontally. */}
+      <div
+        ref={topRef}
+        onScroll={syncFromTop}
+        className={`overflow-x-auto ${overflows ? "" : "hidden"}`}
+        aria-hidden
+      >
+        <div style={{ width: scrollW, height: 1 }} />
+      </div>
+      <div ref={bodyRef} onScroll={syncFromBody} className="overflow-x-auto rounded-lg border border-line">
+        {children}
+      </div>
     </div>
   );
 }

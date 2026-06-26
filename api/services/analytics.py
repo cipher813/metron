@@ -92,6 +92,43 @@ class Holding:
     # (a coverage gap, never a guessed value).
     sector: str | None = None
     country: str | None = None
+    # Per-holding valuation / fundamentals / technicals metrics for the Holdings table
+    # (Holdings metrics). Populated ONLY by the Holdings endpoint on a feed-entitled build
+    # (yfinance-derived data spine → licensed); None off-feed or on a coverage gap, never
+    # fabricated. Sourced from the fundamentals + technicals spine artifacts.
+    # Valuation:
+    market_cap: float | None = None
+    pe: float | None = None          # trailing P/E
+    fwd_pe: float | None = None
+    pb: float | None = None          # price / book
+    ps: float | None = None          # price / sales (TTM)
+    ev_ebitda: float | None = None
+    peg: float | None = None
+    div_yield: float | None = None   # fraction
+    # Fundamentals:
+    rev_growth: float | None = None       # fraction
+    earnings_growth: float | None = None  # fraction
+    gross_margin: float | None = None     # fraction
+    op_margin: float | None = None        # fraction
+    roe: float | None = None              # fraction
+    roa: float | None = None              # fraction
+    beta: float | None = None
+    # Balance sheet (absolute $ + leverage/liquidity):
+    cash: float | None = None             # total cash ($)
+    debt: float | None = None             # total debt ($)
+    net_debt: float | None = None         # debt − cash ($); derived
+    debt_to_equity: float | None = None   # yfinance raw (a percentage, e.g. 47.2)
+    net_debt_to_ebitda: float | None = None  # (debt − cash) / EBITDA; derived leverage
+    current_ratio: float | None = None
+    quick_ratio: float | None = None
+    fcf: float | None = None              # free cash flow ($)
+    # Technicals:
+    rsi_14: float | None = None
+    macd_hist: float | None = None
+    pct_to_ma_50: float | None = None     # fraction
+    pct_to_ma_200: float | None = None    # fraction
+    pct_in_52w_range: float | None = None  # 0-1
+    mom_20d: float | None = None          # fraction
 
 
 @dataclass
