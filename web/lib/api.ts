@@ -194,6 +194,7 @@ export type PeriodTile = {
   gain: number | null;  // $ investment gain over the window (net of external flows)
   twr: number | null;   // % time-weighted return over the window
   benchmarks: BenchmarkReturn[];
+  note?: string | null; // honest empty-state reason (e.g. TODAY "as of <prior date>")
 };
 
 /** Overview performance-vs-market tiles. Benchmark comparison is feed-gated (Pro):

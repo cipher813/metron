@@ -564,6 +564,9 @@ class PeriodTile:
     gain: float | None
     twr: float | None
     benchmarks: list[BenchmarkReturn] = field(default_factory=list)
+    # Honest empty-state reason when the window can't be formed (e.g. "as of 2026-06-25"
+    # for a TODAY tile whose freshest valuation predates today). None for a formed tile.
+    note: str | None = None
 
 
 @dataclass
@@ -783,7 +786,11 @@ def _window_base_index(points: list[PerfPoint], period: str, today: date) -> int
     """Index of the ANCHOR point whose NAV is a window's starting value (the window is
     ``points[base:]``), or None when the series can't form the window.
 
-    - ``today``: the prior recorded snapshot (the latest daily change).
+    - ``today``: the prior recorded snapshot (today's daily change) — but ONLY when the
+      latest snapshot is actually dated ``today``. If the freshest valuation predates
+      ``today`` (pre-open, weekend/holiday, or a stale series), there is no "today" move to
+      report, so this returns None rather than relabel the last completed session's change
+      as "today" (metron-ops bug: a −$10k prior-session move shown as TODAY before the open).
     - ``ytd``: the last snapshot in a PRIOR year (year-end carry); if the series starts
       this year, its first point (return measured from the first recorded day of the year).
     - ``ltm``: the last snapshot on/before today−365d; if the series is shorter, its first
@@ -795,6 +802,8 @@ def _window_base_index(points: list[PerfPoint], period: str, today: date) -> int
         return None
     end_i = n - 1
     if period == "today":
+        if points[end_i].snap_date != today:
+            return None  # no valuation dated today → no honest "today" change to show
         base = end_i - 1
     elif period == "ytd":
         year = points[end_i].snap_date.year
@@ -898,7 +907,14 @@ def period_tiles(
     for period, label in PERIOD_TILES:
         base_i = bases[period]
         if base_i is None:
-            result.tiles.append(PeriodTile(period, label, None, None, None, None, []))
+            # A TODAY tile is suppressed (not just history-thin) when the freshest valuation
+            # predates today — tell the user the as-of date instead of a phantom number.
+            note = (
+                f"as of {points[-1].snap_date.isoformat()}"
+                if period == "today" and points[-1].snap_date != today
+                else None
+            )
+            result.tiles.append(PeriodTile(period, label, None, None, None, None, [], note))
             continue
         window = points[base_i:]
         base, end = window[0], window[-1]

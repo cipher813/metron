@@ -1578,6 +1578,7 @@ class PeriodTileOut(BaseModel):
     gain: float | None
     twr: float | None
     benchmarks: list[BenchmarkReturnOut] = []
+    note: str | None = None  # honest empty-state reason (e.g. TODAY "as of <prior date>")
 
 
 class PeriodTilesOut(BaseModel):

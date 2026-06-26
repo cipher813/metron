@@ -60,7 +60,7 @@ function Tile({ tile, selected }: { tile: PeriodTile; selected: Set<string> }) {
           ) : null}
         </>
       ) : (
-        <div className="mt-2 text-sm text-muted">history building…</div>
+        <div className="mt-2 text-sm text-muted">{tile.note ?? "history building…"}</div>
       )}
     </div>
   );
