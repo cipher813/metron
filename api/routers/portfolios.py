@@ -33,6 +33,7 @@ from api.services import (
     attribution,
     calendar,
     data_spine,
+    indices,
     intraday,
     labels,
     performance,
@@ -1579,6 +1580,7 @@ class PeriodTileOut(BaseModel):
     twr: float | None
     benchmarks: list[BenchmarkReturnOut] = []
     note: str | None = None  # honest empty-state reason (e.g. TODAY "as of <prior date>")
+    intraday: bool = False  # the live intraday TODAY tile (prior-session close → live NAV)
 
 
 class PeriodTilesOut(BaseModel):
@@ -1600,8 +1602,37 @@ def get_performance_tiles(
     Benchmark comparison is **feed-gated** (metron-ops#44/#83): the no-feed beta gets
     portfolio-only tiles (``with_benchmarks=False`` — no yfinance-derived index data, per
     metron-ops#52); the owner/Pro feed build gets the SPY/QQQ/IWM columns. Account-scoped
-    to the same ``?account_id=`` selection as the rest of the Overview."""
+    to the same ``?account_id=`` selection as the rest of the Overview.
+
+    The TODAY tile is a LIVE intraday number (metron-ops#95) when the intraday overlay is in
+    effect — its endpoint is the same live NAV the headline TOTAL VALUE shows, valued off
+    the same overlay, with benchmark TODAY taken from the Markets-strip index quotes. When
+    the overlay is absent (pre-open / stale / no feed) it falls back to the date-guarded
+    snapshot path (metron#119)."""
     with_benchmarks = _external_market_data_allowed(x_preview_feed)
+    # LIVE intraday endpoint for the TODAY tile: the same overlay + valuation the headline
+    # NAV uses (metron-ops#79/#95), so the tile and TOTAL VALUE move together. None when the
+    # overlay isn't applied → the snapshot path takes over inside period_tiles.
+    live: performance.LiveToday | None = None
+    prices, meta = intraday.for_portfolio(
+        session, portfolio.tenant_id, portfolio.id,
+        feed_entitled=settings.feed_entitled, account_ids=account_ids,
+    )
+    if meta.applied and prices is not None:
+        held = analytics.valued_holdings(
+            session, portfolio.tenant_id, portfolio.id, account_ids=account_ids, prices=prices
+        )
+        priced = [h.market_value for h in held if h.market_value is not None]
+        live_nav = sum(priced) if priced else None
+        bench: dict[str, tuple[float | None, float | None]] = {}
+        if with_benchmarks:
+            snap = indices.load_indices()
+            if snap.available:
+                for q in snap.indices:
+                    bench[q.symbol] = (q.last, q.prev_close)
+        live = performance.LiveToday(
+            nav=live_nav, intraday_applied=True, as_of_utc=meta.as_of_utc, bench=bench
+        )
     return performance.period_tiles(
         session,
         portfolio.tenant_id,
@@ -1609,6 +1640,7 @@ def get_performance_tiles(
         today=date.today(),
         account_ids=account_ids,
         with_benchmarks=with_benchmarks,
+        live=live,
     )
 
 

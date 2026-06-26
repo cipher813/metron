@@ -97,4 +97,10 @@ describe("PerfTiles", () => {
     expect(screen.getByText("as of 2026-06-25")).toBeTruthy();
     expect(screen.queryByText("history building…")).toBeNull();
   });
+
+  it("marks the TODAY tile live when it's the intraday number", () => {
+    const live: PeriodTile[] = [{ ...tiles[0], intraday: true }, ...tiles.slice(1)];
+    render(<PerfTiles tiles={live} benchmarksAvailable />);
+    expect(screen.getByText("live · ~15m delay")).toBeTruthy();
+  });
 });

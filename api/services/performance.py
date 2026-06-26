@@ -567,6 +567,29 @@ class PeriodTile:
     # Honest empty-state reason when the window can't be formed (e.g. "as of 2026-06-25"
     # for a TODAY tile whose freshest valuation predates today). None for a formed tile.
     note: str | None = None
+    # True when this is the live intraday TODAY tile (prior-session close → live NAV,
+    # metron-ops#95) rather than a settled close-to-close window — the UI marks it live.
+    intraday: bool = False
+
+
+@dataclass
+class LiveToday:
+    """The live endpoint for the intraday TODAY tile (metron-ops#95), built by the router
+    from the SAME intraday plumbing the Overview headline NAV uses, so the tile and the
+    TOTAL VALUE move together:
+
+    - ``nav``: current portfolio NAV valued off the live intraday overlay.
+    - ``intraday_applied``: the overlay is actually in effect (feed-entitled + fresh quote).
+      False (pre-open / stale / no feed) → the TODAY tile falls back to the snapshot path
+      (date-guarded, metron#119) — we never fabricate an intraday move.
+    - ``as_of_utc``: the intraday snapshot's producer write time (UI freshness label).
+    - ``bench``: per-benchmark live ``(last, prev_close)`` from the index-strip artifact —
+      the TODAY benchmark return is the same ``(last/prev − 1)`` the Markets strip shows."""
+
+    nav: float | None
+    intraday_applied: bool = False
+    as_of_utc: str | None = None
+    bench: dict[str, tuple[float | None, float | None]] = field(default_factory=dict)
 
 
 @dataclass
@@ -865,6 +888,45 @@ def _load_perf_points(
     ]
 
 
+def _live_today_tile(
+    session: Session,
+    tenant_id: uuid.UUID,
+    portfolio_id: uuid.UUID,
+    account_ids: Collection[uuid.UUID] | None,
+    points: list[PerfPoint],
+    today: date,
+    with_benchmarks: bool,
+    live: LiveToday | None,
+) -> PeriodTile | None:
+    """The intraday TODAY tile (metron-ops#95): prior trading session's close → current
+    LIVE NAV, flow-neutralized exactly as the snapshot path is. Returns None when the live
+    overlay isn't in effect (no feed / stale / pre-open) or there's no prior session to
+    anchor on — the caller then falls back to the date-guarded snapshot path (metron#119).
+
+    The base is the most recent snapshot STRICTLY BEFORE today (the prior session's close),
+    not ``points[-2]`` — so it's correct whether or not a same-day snapshot already exists.
+    Today's external flow is neutralized with the same ``_scoped_net_purchases`` the daily
+    snapshot uses, so an intraday deposit/withdrawal never reads as a return."""
+    if live is None or not live.intraday_applied or live.nav is None:
+        return None
+    prior = next((p for p in reversed(points) if p.snap_date < today), None)
+    if prior is None or prior.nav <= 0:
+        return None
+    flow = _scoped_net_purchases(
+        session, tenant_id, portfolio_id, account_ids, after=prior.snap_date, through=today
+    )
+    gain = live.nav - prior.nav - flow
+    twr = (live.nav - flow) / prior.nav - 1.0
+    benches: list[BenchmarkReturn] = []
+    if with_benchmarks:
+        for sym, blabel in BENCHMARKS:
+            last, prev = live.bench.get(sym, (None, None))
+            ret = (last / prev - 1.0) if (last is not None and prev) else None
+            alpha = (twr - ret) if ret is not None else None
+            benches.append(BenchmarkReturn(symbol=sym, label=blabel, ret=ret, alpha=alpha))
+    return PeriodTile("today", "Today", prior.snap_date, today, gain, twr, benches, intraday=True)
+
+
 def period_tiles(
     session: Session,
     tenant_id: uuid.UUID,
@@ -874,6 +936,7 @@ def period_tiles(
     account_ids: Collection[uuid.UUID] | None = None,
     with_benchmarks: bool = True,
     benchmark_source: HistorySource | None = None,
+    live: LiveToday | None = None,
 ) -> PeriodTilesResult:
     """Overview hero tiles (metron-ops#83): aggregate holdings performance over Today / YTD
     / LTM, each as $ investment gain + %TWR, plus the per-benchmark return and alpha.
@@ -881,7 +944,12 @@ def period_tiles(
     Benchmark comparison is FEED-GATED: ``with_benchmarks=False`` (the no-feed beta) yields
     portfolio-only tiles (no benchmark columns). When enabled, benchmark returns come from
     the price_bars close cache (SPY/QQQ/IWM ETF proxies); ``benchmark_source`` (passed only
-    when feed-entitled) backfills any window the cache doesn't already span."""
+    when feed-entitled) backfills any window the cache doesn't already span.
+
+    ``live`` (metron-ops#95) makes the TODAY tile a true intraday number — the prior trading
+    session's close → the current LIVE NAV — whenever the intraday overlay is in effect.
+    Without it (pre-open / stale feed / no-feed beta) TODAY falls back to the date-guarded
+    snapshot-to-snapshot path (metron#119), so a prior session is never relabeled as today."""
     points = _load_perf_points(session, tenant_id, portfolio_id, account_ids)
     result = PeriodTilesResult(last_date=points[-1].snap_date if points else None)
     if len(points) < 2:
@@ -904,7 +972,17 @@ def period_tiles(
         bench_history = price_service.close_history_by_symbol(session, symbols)
         result.benchmarks_available = any(bench_history.get(s) for s in symbols)
 
+    # Intraday TODAY (metron-ops#95): when the live overlay is in effect, the TODAY tile is
+    # (prior-session close → live NAV), so it moves intraday with the headline NAV instead
+    # of sitting flat at the last settled close until EOD.
+    live_today = _live_today_tile(
+        session, tenant_id, portfolio_id, account_ids, points, today, with_benchmarks, live
+    )
+
     for period, label in PERIOD_TILES:
+        if period == "today" and live_today is not None:
+            result.tiles.append(live_today)
+            continue
         base_i = bases[period]
         if base_i is None:
             # A TODAY tile is suppressed (not just history-thin) when the freshest valuation

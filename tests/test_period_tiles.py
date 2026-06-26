@@ -46,6 +46,29 @@ def _bars(session, symbol, bars):
     session.commit()
 
 
+def _txn(session, tenant, pid, when, txn_type, amount):
+    """A BUY/SELL on ``when`` for ``amount`` (the external-capital flow `_net_purchases`
+    neutralizes) — needs an Account under ``pid`` for the portfolio join."""
+    aid = uuid.uuid4()
+    session.add(
+        models.Account(
+            id=aid, tenant_id=uuid.UUID(tenant), portfolio_id=pid,
+            broker="csv", external_id=f"acct-{when}-{txn_type}", name="A",
+        )
+    )
+    sec = models.Security(symbol="AAPL", currency="USD")
+    session.add(sec)
+    session.flush()
+    session.add(
+        models.Transaction(
+            tenant_id=uuid.UUID(tenant), account_id=aid, security_id=sec.id,
+            txn_type=txn_type, quantity=1, price=amount, amount=amount, currency="USD",
+            trade_date=when, source_key=f"{txn_type}-{when}",
+        )
+    )
+    session.commit()
+
+
 # A clean 4-point series with no flows: 1000 → 1100 (year-end) → 1300 → 1320, so each
 # window's TWR/gain is hand-checkable.
 _SERIES = [
@@ -178,6 +201,84 @@ class TestTodayDateGuard:
         today = next(t for t in res.tiles if t.period == "today")
         assert today.gain == pytest.approx(20.0)  # 1300 → 1320
         assert today.note is None
+
+
+class TestLiveIntradayToday:
+    """The TODAY tile is a live intraday number (metron-ops#95) when the overlay is in
+    effect: prior trading session's close → current live NAV, flow-neutralized. When the
+    overlay is absent it must fall back to the date-guarded snapshot path (metron#119)."""
+
+    def test_intraday_today_anchors_prior_session_to_live_nav(self, db_session, tenant):
+        pid = uuid.uuid4()
+        for when, nav in _SERIES:  # last snapshot 2024-06-30 @ 1320
+            _snap(db_session, tenant, pid, when, nav)
+        live = perf.LiveToday(
+            nav=1353.0,  # live NAV now (intraday)
+            intraday_applied=True,
+            as_of_utc="2024-07-01T17:30:00Z",
+            bench={"SPY": (101.0, 100.0), "QQQ": (None, None), "IWM": (200.0, 0.0)},
+        )
+        res = perf.period_tiles(
+            db_session, uuid.UUID(tenant), pid, today=date(2024, 7, 1), with_benchmarks=True, live=live
+        )
+        today = next(t for t in res.tiles if t.period == "today")
+        assert today.intraday is True
+        assert today.note is None
+        # Prior session close = last snapshot before today (2024-06-30 @ 1320) → live 1353.
+        assert today.start_date == date(2024, 6, 30)
+        assert today.end_date == date(2024, 7, 1)
+        assert today.gain == pytest.approx(33.0)  # 1353 − 1320 (no flow today)
+        assert today.twr == pytest.approx(1353 / 1320 - 1)
+        # Benchmark TODAY = the live (last/prev − 1) the Markets strip shows.
+        spy = next(b for b in today.benchmarks if b.symbol == "SPY")
+        assert spy.ret == pytest.approx(0.01)  # 101/100 − 1
+        assert spy.alpha == pytest.approx((1353 / 1320 - 1) - 0.01)
+        # Missing / zero-prev quotes degrade to None, never a divide-by-zero or fabrication.
+        assert next(b for b in today.benchmarks if b.symbol == "QQQ").ret is None
+        assert next(b for b in today.benchmarks if b.symbol == "IWM").ret is None
+
+    def test_intraday_today_neutralizes_a_same_day_flow(self, db_session, tenant):
+        pid = uuid.uuid4()
+        _snap(db_session, tenant, pid, date(2024, 6, 28), 1000.0)
+        _snap(db_session, tenant, pid, date(2024, 6, 30), 1200.0)  # prior session close
+        # A +300 BUY lands TODAY → the intraday window must strip it from both gain and TWR.
+        _txn(db_session, tenant, pid, date(2024, 7, 1), "BUY", 300.0)
+        live = perf.LiveToday(nav=1530.0, intraday_applied=True)
+        res = perf.period_tiles(
+            db_session, uuid.UUID(tenant), pid, today=date(2024, 7, 1), with_benchmarks=False, live=live
+        )
+        today = next(t for t in res.tiles if t.period == "today")
+        # gain net of flow = 1530 − 1200 − 300 = 30; TWR pre-flow = 1230/1200 − 1 = 0.025.
+        assert today.gain == pytest.approx(30.0)
+        assert today.twr == pytest.approx(1230 / 1200 - 1)
+
+    def test_falls_back_to_snapshot_path_when_overlay_not_applied(self, db_session, tenant):
+        pid = uuid.uuid4()
+        for when, nav in _SERIES:
+            _snap(db_session, tenant, pid, when, nav)
+        # Feed present but overlay not in effect (stale / pre-open) → snapshot path + guard.
+        live = perf.LiveToday(nav=9999.0, intraday_applied=False)
+        res = perf.period_tiles(
+            db_session, uuid.UUID(tenant), pid, today=date(2024, 7, 1), with_benchmarks=False, live=live
+        )
+        today = next(t for t in res.tiles if t.period == "today")
+        assert today.intraday is False
+        assert today.gain is None and today.note == "as of 2024-06-30"
+
+    def test_intraday_skipped_when_no_prior_session_to_anchor(self, db_session, tenant):
+        # Only a same-day snapshot exists → no prior session before today → no intraday tile.
+        pid = uuid.uuid4()
+        _snap(db_session, tenant, pid, date(2024, 6, 28), 1000.0)
+        _snap(db_session, tenant, pid, date(2024, 7, 1), 1010.0)
+        live = perf.LiveToday(nav=1020.0, intraday_applied=True)
+        res = perf.period_tiles(
+            db_session, uuid.UUID(tenant), pid, today=date(2024, 7, 1), with_benchmarks=False, live=live
+        )
+        today = next(t for t in res.tiles if t.period == "today")
+        # Prior session = 2024-06-28 → anchors there (1000 → live 1020).
+        assert today.intraday is True
+        assert today.start_date == date(2024, 6, 28)
+        assert today.gain == pytest.approx(20.0)
 
 
 class TestEmpty:

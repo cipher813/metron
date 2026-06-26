@@ -195,6 +195,7 @@ export type PeriodTile = {
   twr: number | null;   // % time-weighted return over the window
   benchmarks: BenchmarkReturn[];
   note?: string | null; // honest empty-state reason (e.g. TODAY "as of <prior date>")
+  intraday?: boolean;   // live intraday TODAY tile (prior-session close → live NAV)
 };
 
 /** Overview performance-vs-market tiles. Benchmark comparison is feed-gated (Pro):
