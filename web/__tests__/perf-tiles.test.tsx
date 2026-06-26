@@ -76,4 +76,25 @@ describe("PerfTiles", () => {
     render(<PerfTiles tiles={building} benchmarksAvailable={false} />);
     expect(screen.getByText("history building…")).toBeTruthy();
   });
+
+  it("shows the as-of note (not a phantom number) when TODAY is suppressed pre-open", () => {
+    // Server suppresses TODAY when the freshest valuation predates today and supplies an
+    // honest note — the tile must surface that, never a relabeled prior-session move.
+    const suppressed: PeriodTile[] = [
+      {
+        period: "today",
+        label: "Today",
+        start_date: null,
+        end_date: null,
+        gain: null,
+        twr: null,
+        benchmarks: [],
+        note: "as of 2026-06-25",
+      },
+      ...tiles.slice(1),
+    ];
+    render(<PerfTiles tiles={suppressed} benchmarksAvailable={false} />);
+    expect(screen.getByText("as of 2026-06-25")).toBeTruthy();
+    expect(screen.queryByText("history building…")).toBeNull();
+  });
 });

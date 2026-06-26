@@ -143,6 +143,43 @@ class TestBenchmarks:
         assert all(b.ret is None and b.alpha is None for b in ytd.benchmarks)
 
 
+class TestTodayDateGuard:
+    """A TODAY tile must reflect TODAY — never relabel the last completed session's change
+    as "today" when the freshest valuation predates today (pre-open / weekend / stale
+    series). Regression for the bug where a −$10k prior-session move showed as TODAY before
+    the market even opened."""
+
+    def test_today_suppressed_when_latest_snapshot_predates_today(self, db_session, tenant):
+        pid = uuid.uuid4()
+        for when, nav in _SERIES:  # last snapshot 2024-06-30
+            _snap(db_session, tenant, pid, when, nav)
+        # It's the NEXT day, pre-open: no snapshot dated today yet.
+        res = perf.period_tiles(
+            db_session, uuid.UUID(tenant), pid, today=date(2024, 7, 1), with_benchmarks=False
+        )
+        today = next(t for t in res.tiles if t.period == "today")
+        # No phantom number — the prior session's −/+ move is NOT shown as today.
+        assert today.gain is None
+        assert today.twr is None
+        assert today.benchmarks == []
+        # ...and the user is told why, with the as-of date of the freshest valuation.
+        assert today.note == "as of 2024-06-30"
+        # YTD/LTM still form (they don't require a snapshot dated exactly today).
+        ytd = next(t for t in res.tiles if t.period == "ytd")
+        assert ytd.gain is not None and ytd.note is None
+
+    def test_today_forms_when_latest_snapshot_is_today(self, db_session, tenant):
+        pid = uuid.uuid4()
+        for when, nav in _SERIES:
+            _snap(db_session, tenant, pid, when, nav)
+        res = perf.period_tiles(
+            db_session, uuid.UUID(tenant), pid, today=_TODAY, with_benchmarks=False
+        )
+        today = next(t for t in res.tiles if t.period == "today")
+        assert today.gain == pytest.approx(20.0)  # 1300 → 1320
+        assert today.note is None
+
+
 class TestEmpty:
     def test_no_tiles_until_two_snapshots(self, db_session, tenant):
         pid = uuid.uuid4()
