@@ -41,7 +41,11 @@ function Tile({ tile, selected }: { tile: PeriodTile; selected: Set<string> }) {
     <div className="rounded-lg border border-line p-4">
       <div className="flex items-baseline justify-between">
         <div className="text-xs font-medium uppercase tracking-wide text-muted">{tile.label}</div>
-        {span ? <div className="text-[10px] text-muted/70">since {span}</div> : null}
+        {tile.intraday ? (
+          <div className="text-[10px] text-accent/80">live · ~15m delay</div>
+        ) : span ? (
+          <div className="text-[10px] text-muted/70">since {span}</div>
+        ) : null}
       </div>
       {has ? (
         <>
