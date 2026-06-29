@@ -1,16 +1,25 @@
 flow_name: metron
 repo: nousergon/metron
 owner: "@brianmcmahon"
-# s3-only notifier (no ${VAR} secrets) — deploy-safe with zero secret-resolution
-# crash risk. metron has its own /metron/* secret namespace + Resend email (not
-# the fleet's /alpha-engine/* + Gmail), and is not "alpha-engine-deployed", so the
-# fleet's email/SSM-seeded notifiers don't apply. Failures are captured + deduped
-# to S3 via the instance role; an alert channel (Telegram or Resend SMTP) is a
-# tracked follow-up.
+# s3 capture + Telegram alert. metron has its own /metron/* secret namespace +
+# Resend email (not the fleet's /alpha-engine/* + Gmail), and is not
+# "alpha-engine-deployed", so the fleet's email/SSM-seeded notifiers don't apply.
+# Failures are captured + deduped to S3 via the instance role AND paged to the
+# fleet ops Telegram channel (config#1267). flow-doctor resolves the ${VAR}s
+# eagerly+strictly at load, so both must be present in the process env at startup
+# — deploy-on-merge.sh hydrates them from /metron/telegram_* into metron-ops/.env
+# (the EnvironmentFile metron-api loads) BEFORE the systemctl restart, so a
+# rebuilt box self-heals and there is no unresolved-${VAR} crash. Telegram chosen
+# over Resend SMTP: native flow-doctor support (no library patch), matches the
+# fleet's ops-alert channel, and flow-doctor's email notifier hardcodes the SMTP
+# username to the sender (incompatible with Resend's required `resend` username).
 notify:
   - type: s3
     bucket: alpha-engine-research
     subsystem: metron
+  - type: telegram
+    bot_token: ${TELEGRAM_BOT_TOKEN}
+    chat_id: ${TELEGRAM_CHAT_ID}
 store:
   type: sqlite
   path: /tmp/flow_doctor.db
