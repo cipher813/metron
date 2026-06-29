@@ -41,7 +41,9 @@ BLOCK=$(mktemp)
   for pair in \
     "FLEX_TOKEN:/metron/flex_token" \
     "FLEX_QUERY_ID:/metron/flex_query_id" \
-    "METRON_ADVISOR_SFT_CAPTURE_ENABLED:/metron/advisor_sft_capture_enabled"; do
+    "METRON_ADVISOR_SFT_CAPTURE_ENABLED:/metron/advisor_sft_capture_enabled" \
+    "TELEGRAM_BOT_TOKEN:/metron/telegram_bot_token" \
+    "TELEGRAM_CHAT_ID:/metron/telegram_chat_id"; do
     var=${pair%%:*}; path=${pair#*:}
     val=$(aws ssm get-parameter --region us-east-1 --name "$path" --with-decryption --query Parameter.Value --output text 2>/dev/null)
     [ -n "$val" ] && [ "$val" != "None" ] && printf '%s=%s\n' "$var" "$val"
