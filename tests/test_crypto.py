@@ -144,6 +144,21 @@ class TestForPortfolio:
         btc = next(p for p in s.positions if p.chain == "BTC")
         assert btc.synced and btc.value_usd == 30000.0 and btc.label == "cold"
 
+    def test_eth_wallet_with_tokens_multiple_positions(self, db_session):
+        # One ETH address emits native ETH + per-token rows → multiple positions, one wallet id.
+        tid, pid = _seed_portfolio(db_session)
+        eth_row = crypto.add_address(db_session, tid, pid, "ETH", _ETH)
+        art = _art([
+            {"chain": "ETH", "address": _ETH.lower(), "symbol": "ETH", "balance": 0.5, "price_usd": 2000.0, "value_usd": 1000.0},
+            {"chain": "ETH", "address": _ETH.lower(), "symbol": "STETH", "balance": 1.0, "price_usd": 1600.0, "value_usd": 1600.0},
+        ])
+        now = datetime(2026, 6, 29, 12, 5, tzinfo=UTC)
+        s = crypto.for_portfolio(db_session, tid, pid, reader=lambda: art, now=now)
+        assert s.n_pending == 0
+        assert [p.symbol for p in s.positions] == ["ETH", "STETH"]
+        assert all(str(p.id) == str(eth_row.id) for p in s.positions)  # same wallet id
+        assert s.total_usd == pytest.approx(2600.0)
+
     def test_stale_artifact_marks_pending(self, db_session):
         tid, pid = _seed_portfolio(db_session)
         crypto.add_address(db_session, tid, pid, "BTC", _BTC)

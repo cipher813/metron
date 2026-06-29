@@ -116,38 +116,51 @@ export function CryptoPanel({ portfolioId, summary }: { portfolioId: string; sum
           </Empty>
         ) : (
           <>
-            <Table head={["Chain", "Wallet", "Balance", "Price", "Value", ""]}>
-              {positions.map((p) => (
-                <tr key={p.id} className="border-b border-line last:border-0">
-                  <td className="px-4 py-2 font-medium">{p.chain}</td>
-                  <td className="px-4 py-2 text-muted">
-                    <span className="font-mono" title={p.address}>
-                      {short(p.address)}
-                    </span>
-                    {p.label ? <span className="ml-2 text-xs">{p.label}</span> : null}
-                  </td>
-                  <td className="px-4 py-2 tabular-nums">{p.balance != null ? quantity(p.balance) : "—"}</td>
-                  <td className="px-4 py-2 tabular-nums text-muted">{p.price_usd != null ? money(p.price_usd) : "—"}</td>
-                  <td className="px-4 py-2 tabular-nums">
-                    {p.synced && p.value_usd != null ? (
-                      money(p.value_usd)
-                    ) : (
-                      <span className="text-[10px] uppercase tracking-wide text-muted">Pending sync</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => remove(p.id)}
-                      disabled={pending}
-                      aria-label={`Remove ${p.chain} wallet`}
-                      className="rounded px-2 py-0.5 text-xs text-muted hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-50"
-                    >
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))}
+            <Table head={["Asset", "Wallet", "Balance", "Price", "Value", ""]}>
+              {positions.map((p, i) => {
+                // One wallet → many rows (native + ERC-20 tokens). Show the wallet address +
+                // Remove only on the first row of each wallet; token rows indent under it.
+                const firstOfWallet = i === 0 || positions[i - 1].id !== p.id;
+                return (
+                  <tr key={`${p.id}-${p.symbol ?? p.chain}`} className="border-b border-line last:border-0">
+                    <td className={`px-4 py-2 ${firstOfWallet ? "font-medium" : "pl-8 text-muted"}`}>
+                      {p.symbol ?? p.chain}
+                    </td>
+                    <td className="px-4 py-2 text-muted">
+                      {firstOfWallet ? (
+                        <>
+                          <span className="font-mono" title={p.address}>
+                            {short(p.address)}
+                          </span>
+                          {p.label ? <span className="ml-2 text-xs">{p.label}</span> : null}
+                        </>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-2 tabular-nums">{p.balance != null ? quantity(p.balance) : "—"}</td>
+                    <td className="px-4 py-2 tabular-nums text-muted">{p.price_usd != null ? money(p.price_usd) : "—"}</td>
+                    <td className="px-4 py-2 tabular-nums">
+                      {p.synced && p.value_usd != null ? (
+                        money(p.value_usd)
+                      ) : (
+                        <span className="text-[10px] uppercase tracking-wide text-muted">Pending sync</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-right">
+                      {firstOfWallet ? (
+                        <button
+                          type="button"
+                          onClick={() => remove(p.id)}
+                          disabled={pending}
+                          aria-label={`Remove ${p.chain} wallet`}
+                          className="rounded px-2 py-0.5 text-xs text-muted hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-50"
+                        >
+                          Remove
+                        </button>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })}
             </Table>
             {n_pending > 0 ? (
               <p className="mt-2 text-xs text-muted">

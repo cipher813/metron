@@ -219,12 +219,14 @@ def for_portfolio(
     now = now or datetime.now(UTC)
     addrs = list_addresses(session, tenant_id, portfolio_id)
     art = (reader or _default_reader)()
-    by_addr: dict[tuple[str, str], dict] = {}
+    # One tracked address can map to MANY balance rows: an ETH wallet emits native ETH PLUS a
+    # row per priced ERC-20 token (a BTC xpub emits one summed row). Group by (chain, address).
+    by_addr: dict[tuple[str, str], list[dict]] = {}
     as_of = None
     if art:
         as_of = art.get("as_of_utc")
         for b in art.get("balances", []):
-            by_addr[(str(b.get("chain", "")).upper(), str(b.get("address", "")))] = b
+            by_addr.setdefault((str(b.get("chain", "")).upper(), str(b.get("address", ""))), []).append(b)
     stale = _is_stale(as_of, now)
     available = bool(art) and not stale
     positions: list[CryptoPosition] = []
@@ -232,24 +234,25 @@ def for_portfolio(
     total = 0.0
     any_value = False
     for a in addrs:
-        b = by_addr.get((a.chain, a.address)) if available else None
-        if b is None:
+        entries = by_addr.get((a.chain, a.address), []) if available else []
+        if not entries:
             n_pending += 1
             positions.append(
                 CryptoPosition(a.id, a.chain, a.address, a.label, None, None, None, None, synced=False)
             )
             continue
-        bal = _f(b.get("balance"))
-        px = _f(b.get("price_usd"))
-        val = _f(b.get("value_usd"))
-        if val is None and bal is not None and px is not None:
-            val = bal * px
-        if val is not None:
-            total += val
-            any_value = True
-        positions.append(
-            CryptoPosition(a.id, a.chain, a.address, a.label, b.get("symbol") or a.chain, bal, px, val, synced=True)
-        )
+        for b in entries:
+            bal = _f(b.get("balance"))
+            px = _f(b.get("price_usd"))
+            val = _f(b.get("value_usd"))
+            if val is None and bal is not None and px is not None:
+                val = bal * px
+            if val is not None:
+                total += val
+                any_value = True
+            positions.append(
+                CryptoPosition(a.id, a.chain, a.address, a.label, b.get("symbol") or a.chain, bal, px, val, synced=True)
+            )
     return CryptoSummary(
         available=available,
         as_of_utc=as_of,
