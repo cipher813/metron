@@ -136,7 +136,7 @@ const COLUMNS: Column[] = [
   { key: "ltm_pct", label: "LTM", pricedOnly: true, defaultDesc: true, value: (h) => h.ltm_pct },
 ];
 
-type MetricGroup = "Score" | "Valuation" | "Fundamentals" | "Balance Sheet" | "Technicals" | "Consensus";
+export type MetricGroup = "Score" | "Valuation" | "Fundamentals" | "Balance Sheet" | "Technicals" | "Consensus";
 
 type MetricColumn = {
   key: string;
@@ -230,7 +230,7 @@ const METRIC_COLUMNS: MetricColumn[] = [
   { key: "news_sentiment", label: "Sentiment", group: "Consensus", value: (h) => h.news_sentiment, render: (v) => decimal(v, 2), signed: true, title: "News sentiment — trust-weighted Loughran-McDonald composite ∈ [-1, +1]" },
 ];
 
-const METRIC_GROUP_ORDER: MetricGroup[] = ["Score", "Valuation", "Fundamentals", "Balance Sheet", "Technicals", "Consensus"];
+export const METRIC_GROUP_ORDER: MetricGroup[] = ["Score", "Valuation", "Fundamentals", "Balance Sheet", "Technicals", "Consensus"];
 
 // Lookup over EVERY sortable column (position + metric), so header clicks sort uniformly.
 const SORT_BY_KEY = new Map<string, (h: Holding) => SortValue>([
@@ -250,17 +250,24 @@ export function HoldingsTable({
   baseCurrency,
   priced,
   portfolioId,
+  visibleMetricGroups = METRIC_GROUP_ORDER,
 }: {
   holdings: Holding[];
   baseCurrency: string;
   priced: boolean;
   /** When set, the Ticker cell exposes an inline alias editor (metron-ops#47). */
   portfolioId?: string;
+  /** Which metric bands to render, in canonical order (column presets, metron-ops#114).
+   *  Defaults to every band; the position spine is always shown. */
+  visibleMetricGroups?: MetricGroup[];
 }) {
   const positionColumns = priced ? COLUMNS : COLUMNS.filter((c) => !c.pricedOnly);
   // Metric bands only in the priced view (they're feed-gated; the cost-basis-only view
   // stays exactly as before).
   const showMetrics = priced;
+  // The visible bands, normalized to canonical order, with the matching metric columns.
+  const visibleGroups = METRIC_GROUP_ORDER.filter((g) => visibleMetricGroups.includes(g));
+  const visibleMetricCols = METRIC_COLUMNS.filter((c) => visibleGroups.includes(c.group));
   const [sort, setSort] = useState<{ key: string; desc: boolean } | null>(null);
 
   const sorted = useMemo(() => {
@@ -321,12 +328,12 @@ export function HoldingsTable({
     </button>
   );
 
-  const metricsByGroup = METRIC_GROUP_ORDER.map(
+  const metricsByGroup = visibleGroups.map(
     (g) => [g, METRIC_COLUMNS.filter((c) => c.group === g)] as const,
   );
 
   return (
-    <DualScroll deps={`${positionColumns.length}:${holdings.length}:${showMetrics}`}>
+    <DualScroll deps={`${positionColumns.length}:${holdings.length}:${showMetrics}:${visibleMetricCols.length}`}>
       <table className="w-full text-sm">
         <thead className="sticky top-0 z-20">
           {showMetrics ? (
@@ -510,7 +517,7 @@ export function HoldingsTable({
                 </>
               ) : null}
               {/* Metric columns are per-security — no portfolio total. */}
-              {showMetrics ? METRIC_COLUMNS.map((c) => <td key={c.key} className="px-3 py-2" />) : null}
+              {showMetrics ? visibleMetricCols.map((c) => <td key={c.key} className="px-3 py-2" />) : null}
             </tr>
           </tfoot>
         ) : null}

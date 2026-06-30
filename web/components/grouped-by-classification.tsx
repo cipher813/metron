@@ -7,7 +7,7 @@
 // Presentational; the median bands come from the feed-gated valuation-medians artifact
 // (empty off a feed-entitled build → the bands show "—" but the grouping still works).
 
-import { HoldingsTable } from "@/components/holdings-table";
+import { HoldingsTable, type MetricGroup } from "@/components/holdings-table";
 import type { GroupMedians, Holding, ValuationMedians } from "@/lib/api";
 import { accountingMoneyWhole, moneyWhole, multiple, pct1, signClass } from "@/lib/format";
 
@@ -112,12 +112,15 @@ export function GroupedByClassification({
   priced,
   medians,
   portfolioId,
+  visibleMetricGroups,
 }: {
   holdings: Holding[];
   baseCurrency: string;
   priced: boolean;
   medians: ValuationMedians | null;
   portfolioId?: string;
+  /** Column-preset bands threaded to every HoldingsTable (metron-ops#114). */
+  visibleMetricGroups?: MetricGroup[];
 }) {
   const sectors = partition(holdings, "sector");
 
@@ -150,6 +153,7 @@ export function GroupedByClassification({
                   baseCurrency={baseCurrency}
                   priced={priced}
                   portfolioId={portfolioId}
+                  visibleMetricGroups={visibleMetricGroups}
                 />
               </div>
             ))}
