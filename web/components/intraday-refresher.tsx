@@ -1,20 +1,34 @@
 "use client";
 
-// Live-NAV refresher (metron-ops#79). While Metron is open, every ~5 min it:
+// Live-NAV refresher (metron-ops#79). While Metron is open it periodically:
 //   1. re-fetches the intraday-valuation status (also pinging the data-spine UI heartbeat
 //      via the API, so the producer keeps publishing while someone is looking), and
-//   2. calls router.refresh() so the server components re-render — the headline NAV and
-//      every position value recompute from the fresh intraday balances.
+//   2. calls router.refresh() so the server components re-render — the headline NAV, the
+//      Today tile, and every position value pick up the freshest snapshot.
 // It renders a small honest label ("intraday · ~15-min delayed · as of HH:MM") only while
 // the overlay is actually applied (feed-entitled + a fresh snapshot). On the no-feed beta
 // or after the close (stale) it renders nothing and the page shows EOD-close values.
+//
+// Cadence adapts to the state. Intraday live (or a transient/recoverable state) polls fast
+// so the NAV revalues with the delayed quotes. Intraday OFF / no-feed won't gain an overlay
+// within the session, BUT the once-daily EOD NAV snapshot still advances — so those keep a
+// SLOW poll rather than going idle, otherwise an all-day-open tab keeps showing yesterday's
+// Today tile until a manual reload (the "Today tile stuck on 6/29" bug).
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { IntradayStatus } from "@/lib/api";
 import { fetchIntradayStatusAction } from "@/app/portfolios/[id]/intraday-action";
 
-const REFRESH_MS = 5 * 60 * 1000;
+const FAST_MS = 5 * 60 * 1000; // intraday live / transient — revalue from delayed quotes
+const SLOW_MS = 30 * 60 * 1000; // off / no-feed — still catch the daily EOD snapshot advance
+
+/** How often to refresh given the current intraday reason. "off" (toggle off) and "feed"
+ *  (deployment has no feed) won't gain an overlay this session, but the daily EOD snapshot
+ *  still moves, so they poll slowly rather than not at all. Everything else polls fast. */
+function intervalFor(reason: string | null | undefined): number {
+  return reason === "off" || reason === "feed" ? SLOW_MS : FAST_MS;
+}
 
 /** "as of 11:03 AM" in the viewer's local time, from the artifact's UTC write time. */
 function asOf(iso: string | null): string {
@@ -30,27 +44,34 @@ export function IntradayRefresher({ portfolioId }: { portfolioId: string }) {
 
   useEffect(() => {
     let alive = true;
-    let id: ReturnType<typeof setInterval> | null = null;
-    // First paint: fetch the current status immediately (the SSR'd page is already fresh,
-    // so no refresh on this first call) — the label appears without waiting a full cycle.
-    fetchIntradayStatusAction(portfolioId).then((s) => {
-      if (!alive || !s) return;
-      setStatus(s);
-      // Persistent off-states won't change within the session — the user's intraday toggle
-      // is off ("off") or this deployment has no feed ("feed") — so don't burn a 5-min
-      // router.refresh cycle. Transient states (stale after the close, momentarily
-      // unavailable) can recover during the session, so those keep polling.
-      if (s.reason === "off" || s.reason === "feed") return;
-      id = setInterval(async () => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    // Self-scheduling poll: each tick re-reads the status (so the cadence adapts when the
+    // reason changes — e.g. stale→applied when the feed recovers) and re-renders the server
+    // components so NAV / Today tile / positions pick up the freshest snapshot.
+    const schedule = (reason: string | null | undefined) => {
+      if (!alive) return;
+      timer = setTimeout(async () => {
+        if (!alive) return;
         const next = await fetchIntradayStatusAction(portfolioId);
         if (!alive) return;
         if (next) setStatus(next);
-        router.refresh(); // re-render server components → NAV + positions revalue live
-      }, REFRESH_MS);
+        router.refresh();
+        schedule(next?.reason);
+      }, intervalFor(reason));
+    };
+
+    // First paint: fetch the current status immediately (the SSR'd page is already fresh,
+    // so no refresh on this first call) — the label appears without waiting a full cycle —
+    // then start the poll at the cadence this state warrants.
+    fetchIntradayStatusAction(portfolioId).then((s) => {
+      if (!alive) return;
+      if (s) setStatus(s);
+      schedule(s?.reason);
     });
     return () => {
       alive = false;
-      if (id) clearInterval(id);
+      if (timer) clearTimeout(timer);
     };
   }, [portfolioId, router]);
 

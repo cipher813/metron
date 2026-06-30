@@ -60,6 +60,7 @@ def _navsnaps(pid):
 def test_daily_refresh_records_snapshots_for_all_portfolios(client, db_session, monkeypatch):
     monkeypatch.setattr("api.services.prices.fetch_latest_closes", _price_src)
     monkeypatch.setattr("api.services.performance.fetch_latest_closes", _spy_src)
+    monkeypatch.setattr("api.maintenance.fetch_latest_closes", _spy_src)
     _no_derived(monkeypatch)
     # Two tenants, one portfolio each — the operator job sweeps both.
     t1, t2 = str(uuid.uuid4()), str(uuid.uuid4())
@@ -80,6 +81,7 @@ def test_daily_refresh_records_snapshots_for_all_portfolios(client, db_session, 
 def test_daily_refresh_idempotent_per_day(client, db_session, monkeypatch):
     monkeypatch.setattr("api.services.prices.fetch_latest_closes", _price_src)
     monkeypatch.setattr("api.services.performance.fetch_latest_closes", _spy_src)
+    monkeypatch.setattr("api.maintenance.fetch_latest_closes", _spy_src)
     _no_derived(monkeypatch)
     t = str(uuid.uuid4())
     pid = _seed(client, t)
@@ -91,12 +93,13 @@ def test_daily_refresh_idempotent_per_day(client, db_session, monkeypatch):
 def test_daily_refresh_skips_unpriceable_without_fabricating(client, db_session, monkeypatch):
     monkeypatch.setattr("api.services.prices.fetch_latest_closes", lambda s, *, source=None: {})
     monkeypatch.setattr("api.services.performance.fetch_latest_closes", lambda s, *, source=None: {})
+    monkeypatch.setattr("api.maintenance.fetch_latest_closes", lambda s, *, source=None: {})
     _no_derived(monkeypatch)
     t = str(uuid.uuid4())
     _seed(client, t)
     result = daily_refresh(db_session, today=date(2024, 6, 3))
     assert result.portfolios == 1
-    assert result.snapshots_recorded == 0  # nothing priceable → no fabricated NAV
+    assert result.snapshots_recorded == 0  # nothing priceable → no fabricated NAV (gate passes; record_snapshot skips)
 
 
 def test_daily_refresh_populates_derived_pages(client, db_session, monkeypatch):
@@ -104,6 +107,7 @@ def test_daily_refresh_populates_derived_pages(client, db_session, monkeypatch):
     # without a manual "Compute" click. Stub the heavy backfills to assert the wiring.
     monkeypatch.setattr("api.services.prices.fetch_latest_closes", _price_src)
     monkeypatch.setattr("api.services.performance.fetch_latest_closes", _spy_src)
+    monkeypatch.setattr("api.maintenance.fetch_latest_closes", _spy_src)
     monkeypatch.setattr("api.maintenance.performance.reconstruct_snapshots", lambda *a, **k: 5)
     monkeypatch.setattr("api.maintenance.risk.compute_risk", lambda *a, **k: types.SimpleNamespace(computable=True))
     monkeypatch.setattr(
@@ -123,6 +127,7 @@ def test_daily_refresh_derived_backfill_is_best_effort(client, db_session, monke
     # snapshot (which have already committed) — it logs a WARN and the job continues.
     monkeypatch.setattr("api.services.prices.fetch_latest_closes", _price_src)
     monkeypatch.setattr("api.services.performance.fetch_latest_closes", _spy_src)
+    monkeypatch.setattr("api.maintenance.fetch_latest_closes", _spy_src)
 
     def boom(*a, **k):
         raise RuntimeError("yfinance down")
@@ -139,9 +144,55 @@ def test_daily_refresh_derived_backfill_is_best_effort(client, db_session, monke
     assert result.earnings_refreshed == 0  # earnings failure is best-effort too
 
 
-def test_daily_refresh_empty_db_is_a_noop(db_session):
+def test_daily_refresh_empty_db_is_a_noop(db_session, monkeypatch):
+    monkeypatch.setattr("api.maintenance.fetch_latest_closes", _spy_src)  # no network for the freshness probe
     result = daily_refresh(db_session, today=date(2024, 6, 3))
     assert result == type(result)(portfolios=0, symbols=0, prices_updated=0, snapshots_recorded=0)
+
+
+def test_daily_refresh_defers_snapshot_until_todays_close_published(client, db_session, monkeypatch):
+    """The freshness gate: a weekday run BEFORE today's close prints in the spine must NOT
+    record a today-stamped snapshot on yesterday's prices — it defers, leaving the Today
+    tile honestly on the prior session until a later fire records the true value."""
+    monkeypatch.setattr("api.services.prices.fetch_latest_closes", _price_src)
+    monkeypatch.setattr("api.services.performance.fetch_latest_closes", _spy_src)
+    # SPY's freshest close is the PRIOR session (today's hasn't published) → defer.
+    stale_spy = {"SPY": ClosePoint(bar_date=date(2024, 5, 31), close=500.0)}  # Fri before Mon 6/3
+    monkeypatch.setattr("api.maintenance.fetch_latest_closes", lambda s, *, source=None: stale_spy)
+    _no_derived(monkeypatch)
+    pid = _seed(client, str(uuid.uuid4()))
+
+    result = daily_refresh(db_session, today=date(2024, 6, 3))  # Monday, pre-publish
+
+    assert result.snapshots_recorded == 0
+    assert result.snapshots_deferred == 1  # surfaced for observability
+    assert db_session.scalars(_navsnaps(pid)).first() is None  # nothing stamped under today
+
+    # Once today's close publishes, a later fire records it (same calendar day, idempotent).
+    fresh_spy = {"SPY": ClosePoint(bar_date=date(2024, 6, 3), close=500.0)}
+    monkeypatch.setattr("api.maintenance.fetch_latest_closes", lambda s, *, source=None: fresh_spy)
+    result2 = daily_refresh(db_session, today=date(2024, 6, 3))
+    assert result2.snapshots_recorded == 1
+    assert result2.snapshots_deferred == 0
+    snap = db_session.scalars(_navsnaps(pid)).first()
+    assert float(snap.nav) == 1500.0
+
+
+def test_daily_refresh_weekend_run_is_not_gated(client, db_session, monkeypatch):
+    """Weekends have no new session, so the gate is a no-op — the carry-forward snapshot
+    (last close) is still recorded even though SPY's bar_date predates 'today'."""
+    monkeypatch.setattr("api.services.prices.fetch_latest_closes", _price_src)
+    monkeypatch.setattr("api.services.performance.fetch_latest_closes", _spy_src)
+    fri_spy = {"SPY": ClosePoint(bar_date=date(2024, 5, 31), close=500.0)}
+    monkeypatch.setattr("api.maintenance.fetch_latest_closes", lambda s, *, source=None: fri_spy)
+    _no_derived(monkeypatch)
+    pid = _seed(client, str(uuid.uuid4()))
+
+    result = daily_refresh(db_session, today=date(2024, 6, 1))  # Saturday
+
+    assert result.snapshots_recorded == 1
+    assert result.snapshots_deferred == 0
+    assert db_session.scalars(_navsnaps(pid)).first() is not None
 
 
 def test_cli_unknown_command_errors():
