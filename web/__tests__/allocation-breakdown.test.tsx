@@ -57,8 +57,9 @@ describe("AllocationBreakdown", () => {
     expect(screen.getByText(/no resolved country/)).toBeInTheDocument();
   });
 
-  it("notes that fund domicile is not underlying exposure", () => {
+  it("notes fund domicile isn't exposure and points to the International override", () => {
     render(<AllocationBreakdown holdings={[h("AAPL")]} baseCurrency="USD" />);
-    expect(screen.getByText(/not its underlying geographic exposure/)).toBeInTheDocument();
+    expect(screen.getByText(/not its underlying exposure/)).toBeInTheDocument();
+    expect(screen.getByText(/reclassify a broad-international fund/)).toBeInTheDocument();
   });
 });
