@@ -4,7 +4,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
-const setSecurityClassificationAction = vi.fn(async () => ({ ok: true, message: "Type saved." }));
+const setSecurityClassificationAction = vi.fn((..._args: unknown[]) =>
+  Promise.resolve({ ok: true, message: "Type saved." }),
+);
 vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock("@/app/portfolios/[id]/actions", () => ({
   setSecurityLabelAction: vi.fn(),
