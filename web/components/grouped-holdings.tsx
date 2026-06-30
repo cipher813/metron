@@ -7,7 +7,7 @@
 // Presentational + server-renderable: HoldingsTable (a client component) carries the
 // sort/interaction; this wrapper only partitions and sums.
 
-import { HoldingsTable } from "@/components/holdings-table";
+import { HoldingsTable, type MetricGroup } from "@/components/holdings-table";
 import type { Holding } from "@/lib/api";
 import { accountingMoneyWhole, accountingPercent, isoDate, moneyWhole, signClass } from "@/lib/format";
 
@@ -109,12 +109,15 @@ export function GroupedHoldings({
   baseCurrency,
   priced,
   portfolioId,
+  visibleMetricGroups,
 }: {
   holdings: Holding[];
   baseCurrency: string;
   priced: boolean;
   /** Threaded to HoldingsTable for the inline ticker-alias editor (metron-ops#47). */
   portfolioId?: string;
+  /** Column-preset bands threaded to every HoldingsTable (metron-ops#114). */
+  visibleMetricGroups?: MetricGroup[];
 }) {
   const groups = groupByType(holdings);
 
@@ -123,7 +126,7 @@ export function GroupedHoldings({
     return (
       <div className="space-y-2">
         {priced ? <PricesAsOf holdings={holdings} /> : null}
-        <HoldingsTable holdings={holdings} baseCurrency={baseCurrency} priced={priced} portfolioId={portfolioId} />
+        <HoldingsTable holdings={holdings} baseCurrency={baseCurrency} priced={priced} portfolioId={portfolioId} visibleMetricGroups={visibleMetricGroups} />
       </div>
     );
   }
@@ -165,7 +168,7 @@ export function GroupedHoldings({
               {hs.length} {hs.length === 1 ? "holding" : "holdings"}
             </span>
           </h3>
-          <HoldingsTable holdings={hs} baseCurrency={baseCurrency} priced={priced} portfolioId={portfolioId} />
+          <HoldingsTable holdings={hs} baseCurrency={baseCurrency} priced={priced} portfolioId={portfolioId} visibleMetricGroups={visibleMetricGroups} />
         </div>
       ))}
     </div>
