@@ -33,8 +33,35 @@ from api.db.session import SessionLocal, create_all
 from api.services import analytics, attribution, data_spine, fx, performance, risk
 from api.services import calendar as calendar_svc
 from api.services import prices as price_service
+from portfolio_analytics.prices import fetch_latest_closes
 
 logger = logging.getLogger(__name__)
+
+
+def _market_closes_published(today: date, *, source=None) -> bool:
+    """True when the spine has published the EOD close for ``today``'s OWN session — the
+    precondition for stamping a NAV snapshot under ``today`` without back-dating stale
+    prices. SPY is the market-freshness proxy (always in the spine, always priceable).
+
+    Why this gate exists: ``record_snapshot`` values holdings on whatever close is cached
+    and stamps it ``today``. If a refresh runs before the spine has published today's
+    close (a scheduled fire that lands ahead of the EOD pipeline, or any pre-close run),
+    it would record YESTERDAY's prices under today's date — the "Today tile shows a flat /
+    wrong move" failure. Deferring until the close prints keeps the tile honestly on the
+    prior session ("as of <date>") until a true ``today`` value exists.
+
+    Scope: a trading weekday only. Weekends/holidays have no new session, so the gate is a
+    no-op there and the existing carry-forward snapshot behaviour is unchanged. When SPY
+    can't be fetched at all, default True — never block the daily snapshot on a transient
+    spine hiccup (the existing 'skipped when nothing is priceable' guard still applies)."""
+    if today.weekday() >= 5:  # Sat/Sun — no new close to wait on; carry-forward unchanged.
+        return True
+    try:
+        spy = fetch_latest_closes(["SPY"], source=source).get("SPY")
+    except Exception as e:  # noqa: BLE001 — a probe failure must never block the daily snapshot
+        logger.warning("close-freshness probe failed (non-fatal, recording anyway): %s", e)
+        return True
+    return spy is None or spy.bar_date >= today
 
 
 @dataclass
@@ -47,6 +74,7 @@ class RefreshResult:
     snapshots_reconstructed: int = 0
     snapshots_reconciled: int = 0  # provisional snapshots restated with struck fund NAVs
     account_snapshots_recorded: int = 0  # per-account NAV snapshots written this run
+    snapshots_deferred: int = 0     # portfolios whose snapshot was deferred (today's close unpublished)
     risk_computed: int = 0          # portfolios whose factor risk backfilled + fit
     attribution_computed: int = 0   # portfolios whose sector attribution backfilled + ran
     earnings_refreshed: int = 0     # securities whose next earnings date refreshed from the spine
@@ -91,6 +119,21 @@ def daily_refresh(session: Session, *, today: date | None = None) -> RefreshResu
     total_symbols = total_updated = total_snaps = total_fx = 0
     total_recon = total_risk = total_attr = total_acct_snaps = total_earnings = 0
     total_reconciled = 0
+
+    # Freshness gate: only stamp a ``today`` NAV snapshot once today's own close has
+    # published in the spine. This lets the refresh fire SOON after the close (instead of
+    # waiting hours for a safely-late single run) without ever back-dating stale prices —
+    # an early fire defers the snapshot, a later fire records it. FX / reconcile /
+    # reconstruct / risk / attribution / earnings are not close-of-today-dependent and run
+    # regardless. Market-wide, so computed once (not per portfolio).
+    closes_published = _market_closes_published(today)
+    if not closes_published:
+        logger.warning(
+            "daily-refresh: %s close not yet published in the spine — deferring NAV "
+            "snapshots this run (a later fire records them once today's close prints)",
+            today,
+        )
+
     for p in portfolios:
         held = analytics.holdings(session, p.tenant_id, p.id)
         symbols = [h.ticker for h in held if h.ticker]
@@ -121,12 +164,21 @@ def daily_refresh(session: Session, *, today: date | None = None) -> RefreshResu
             "performance", p.id,
             lambda p=p: performance.reconstruct_snapshots(session, p.tenant_id, p.id, today=today),
         )
-        snap = performance.record_snapshot(session, p.tenant_id, p.id, today=today)
+        snap = (
+            performance.record_snapshot(session, p.tenant_id, p.id, today=today)
+            if closes_published
+            else None
+        )
         # Per-account NAV snapshots — additive, best-effort (a failure here never costs the
         # portfolio snapshot). Starts the per-account history that can't be reconstructed.
-        acct_snaps = _best_effort(
-            "account-snapshots", p.id,
-            lambda p=p: performance.record_account_snapshots(session, p.tenant_id, p.id, today=today),
+        # Gated on the same close-freshness check so per-account history doesn't back-date.
+        acct_snaps = (
+            _best_effort(
+                "account-snapshots", p.id,
+                lambda p=p: performance.record_account_snapshots(session, p.tenant_id, p.id, today=today),
+            )
+            if closes_published
+            else None
         )
         # Overnight/intraday/day decomposition for the day (metron-ops#87) — additive,
         # best-effort; records the split from the intraday spine so its history accrues.
@@ -193,6 +245,7 @@ def daily_refresh(session: Session, *, today: date | None = None) -> RefreshResu
         snapshots_reconstructed=total_recon,
         snapshots_reconciled=total_reconciled,
         account_snapshots_recorded=total_acct_snaps,
+        snapshots_deferred=(len(portfolios) if not closes_published else 0),
         risk_computed=total_risk,
         attribution_computed=total_attr,
         earnings_refreshed=total_earnings,
@@ -267,11 +320,13 @@ def main(argv: list[str] | None = None) -> int:
             session.close()
         logger.info(
             "daily-refresh done: %d portfolios, %d symbols, %d prices, %d snapshots, "
-            "%d account-snapshots, %d reconstructed, %d risk, %d attribution, universe_published=%s",
+            "%d deferred, %d account-snapshots, %d reconstructed, %d risk, %d attribution, "
+            "universe_published=%s",
             r.portfolios,
             r.symbols,
             r.prices_updated,
             r.snapshots_recorded,
+            r.snapshots_deferred,
             r.account_snapshots_recorded,
             r.snapshots_reconstructed,
             r.risk_computed,
