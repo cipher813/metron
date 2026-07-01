@@ -340,7 +340,7 @@ export const getPortfolio = (tenantId: string, id: string) => get<Portfolio>(ten
 // source until the Pro feed). On a feed-entitled build carries the SAME Holdings metrics
 // (valuation/fundamentals/balance-sheet/technicals/consensus/attractiveness), keyed purely
 // by ticker, for side-by-side comparison — never quantity/cost/market value/P&L, since a
-// watchlist entry has no position (metron-ops#42, metron-ops#123).
+// watchlist entry has no position (metron-ops#42, metron-ops#121).
 export type WatchlistEntry = {
   symbol: string;
   name: string | null;

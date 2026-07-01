@@ -1,4 +1,4 @@
-"""Watchlist metrics (metron-ops#123) — a tracked-but-not-held ticker gets the SAME
+"""Watchlist metrics (metron-ops#121) — a tracked-but-not-held ticker gets the SAME
 valuation/fundamentals/technicals/consensus/attractiveness metrics the Holdings table
 shows, via the shared ``metrics_enrichment`` pipeline, while remaining structurally
 isolated from NAV/holdings/position economics.
