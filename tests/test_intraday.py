@@ -17,7 +17,6 @@ from sqlalchemy import select
 from api.config import settings
 from api.db import models
 from api.services import analytics, intraday
-from portfolio_analytics.prices import ClosePoint
 
 _AS_OF = "2026-06-12T15:00:00Z"
 _NOW = datetime(2026, 6, 12, 15, 3, tzinfo=UTC)   # 3 min after the write — fresh
