@@ -325,10 +325,13 @@ export function AccountPanel({
             checked={included}
             onChange={() => toggle(a.account_id)}
             aria-label={`Include ${accountLabel(a)}`}
-            className="h-4 w-4 shrink-0 rounded border-line"
+            // De-emphasized: a small, muted box that only gains accent + full opacity
+            // when checked — selection is the common case, so the control reads as quiet
+            // background chrome rather than a loud call to action (metron-ops#118+).
+            className={`h-3.5 w-3.5 shrink-0 rounded border-line accent-muted transition ${included ? "opacity-90 accent-accent" : "opacity-40 hover:opacity-70"}`}
           />
         ) : (
-          <span className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         )}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2">
@@ -368,15 +371,11 @@ export function AccountPanel({
             disabled={deleting}
             aria-label={`Delete ${accountLabel(a)}`}
             title="Delete this account and its data (future syncs skip it; restore from Settings)"
-            className="shrink-0 rounded p-1 text-muted hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-50"
+            // A small, dark, understated × — deletion is rare (reclassifying securities
+            // covers most needs), so it reads as quiet chrome until hovered (metron-ops#118+).
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-base leading-none text-muted/50 transition hover:bg-rose-500/10 hover:text-rose-300 disabled:opacity-50"
           >
-            <svg viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4" aria-hidden="true">
-              <path
-                fillRule="evenodd"
-                d="M8.75 1A2.75 2.75 0 0 0 6 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 1 0 .23 1.482l.149-.022.841 10.518A2.75 2.75 0 0 0 7.596 19h4.807a2.75 2.75 0 0 0 2.742-2.53l.841-10.52.149.023a.75.75 0 0 0 .23-1.482 41.03 41.03 0 0 0-2.365-.298V3.75A2.75 2.75 0 0 0 11.25 1h-2.5ZM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4ZM8.58 7.72a.75.75 0 0 0-1.5.06l.3 7.5a.75.75 0 1 0 1.5-.06l-.3-7.5Zm4.34.06a.75.75 0 1 0-1.5-.06l-.3 7.5a.75.75 0 1 0 1.5.06l.3-7.5Z"
-                clipRule="evenodd"
-              />
-            </svg>
+            <span aria-hidden="true">×</span>
           </button>
         ) : (
           <span className="w-6 shrink-0" aria-hidden="true" />
@@ -398,7 +397,7 @@ export function AccountPanel({
               type="checkbox"
               checked={viewingAll}
               onChange={() => pushSelection([])}
-              className="h-4 w-4 rounded border-line"
+              className={`h-3.5 w-3.5 rounded border-line accent-muted transition ${viewingAll ? "opacity-90 accent-accent" : "opacity-40 hover:opacity-70"}`}
             />
             All accounts
           </label>
@@ -411,7 +410,7 @@ export function AccountPanel({
           row (metron-ops). The 16px lead + w-6 trail spacers mirror the row layout so the
           Cost / Unrealized / Market headers sit directly over their columns in both modes. */}
       <div className="flex items-center gap-3 border-b border-line bg-surface px-4 py-2">
-        <span className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1 text-[10px] uppercase tracking-wide text-muted">Account</div>
         <MetricHeader />
         <span className="w-6 shrink-0" aria-hidden="true" />
@@ -432,12 +431,12 @@ export function AccountPanel({
                     onChange={() => toggleGroup(accts)}
                     aria-label={`Toggle all ${label} accounts`}
                     title={`Include / exclude all ${label} accounts`}
-                    className="h-4 w-4 shrink-0 rounded border-line"
+                    className={`h-3.5 w-3.5 shrink-0 rounded border-line accent-muted transition ${groupAllSelected ? "opacity-90 accent-accent" : "opacity-40 hover:opacity-70"}`}
                   />
                 ) : (
-                  // Keep the 16px checkbox slot so the group label lines up with the rows
+                  // Keep the checkbox slot so the group label lines up with the rows
                   // below it (the management panel has no checkbox here) — metron-ops#54.
-                  <span className="h-4 w-4 shrink-0" aria-hidden="true" />
+                  <span className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 )}
                 <span className="text-[11px] font-medium uppercase tracking-wide text-muted">
                   {label} · {accts.length}

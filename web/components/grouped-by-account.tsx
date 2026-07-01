@@ -7,9 +7,11 @@
 // "By account" grouping option only when the Combine toggle is set to By-account. The
 // account column is suppressed here — the section heading already names the account.
 
-import { HoldingsTable, type MetricGroup } from "@/components/holdings-table";
+import type { ReactNode } from "react";
+import { HoldingsTable, type ColumnBand } from "@/components/holdings-table";
+import { PortfolioTotalBar } from "@/components/portfolio-total-bar";
 import type { Holding } from "@/lib/api";
-import { accountingMoneyWhole, accountingPercent, isoDate, moneyWhole, signClass } from "@/lib/format";
+import { isoDate, moneyWhole } from "@/lib/format";
 
 const UNASSIGNED = "Unassigned";
 
@@ -88,72 +90,48 @@ export function GroupedByAccount({
   baseCurrency,
   priced,
   portfolioId,
-  visibleMetricGroups,
+  visibleBands,
+  belowTotal,
 }: {
   holdings: Holding[];
   baseCurrency: string;
   priced: boolean;
   portfolioId?: string;
-  visibleMetricGroups?: MetricGroup[];
+  visibleBands?: ColumnBand[];
+  /** Rendered under the Portfolio total bar (the column-band control, metron-ops#118+). */
+  belowTotal?: ReactNode;
 }) {
   const groups = groupByAccount(holdings);
-
-  // One account → the plain table (its totals row is the total); no headings needed.
-  if (groups.length <= 1) {
-    return (
-      <div className="space-y-2">
-        {priced ? <PricesAsOf holdings={holdings} /> : null}
-        <HoldingsTable holdings={holdings} baseCurrency={baseCurrency} priced={priced} portfolioId={portfolioId} visibleMetricGroups={visibleMetricGroups} />
-      </div>
-    );
-  }
-
-  const grand = totalsOf(holdings);
-  const grandPct = grand.unreal != null && grand.cost ? grand.unreal / grand.cost : null;
+  // Show the total bar whenever there's a control to anchor or multiple accounts to summarize.
+  const showBar = belowTotal != null || groups.length > 1;
 
   return (
     <div className="space-y-5">
       {priced ? <PricesAsOf holdings={holdings} /> : null}
-      <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 rounded-lg border border-line bg-surface px-4 py-3 text-sm">
-        <span className="text-xs font-medium uppercase tracking-wide text-muted">Portfolio total</span>
-        <div className="flex flex-wrap items-baseline gap-x-6 tabular-nums">
-          <span>
-            <span className="text-[10px] uppercase tracking-wide text-muted">Cost </span>
-            {grand.cost != null ? moneyWhole(grand.cost, baseCurrency) : "—"}
-          </span>
-          {priced ? (
-            <>
-              <span>
-                <span className="text-[10px] uppercase tracking-wide text-muted">Market </span>
-                {grand.mv != null ? moneyWhole(grand.mv, baseCurrency) : "—"}
-              </span>
-              <span className={grand.unreal != null ? signClass(grand.unreal) : "text-muted"}>
-                <span className="text-[10px] uppercase tracking-wide text-muted">Unrealized </span>
-                {grand.unreal != null ? accountingMoneyWhole(grand.unreal, baseCurrency) : "—"}
-                {grandPct != null ? <span className="ml-1 text-xs">{accountingPercent(grandPct)}</span> : null}
-              </span>
-            </>
-          ) : null}
-        </div>
-      </div>
-
-      {groups.map(([label, hs]) => {
-        const sub = totalsOf(hs);
-        return (
-          <div key={label}>
-            <h3 className="mb-2 flex flex-wrap items-baseline gap-2 text-sm font-medium">
-              {label}
-              <span className="text-xs text-muted">
-                {hs.length} {hs.length === 1 ? "holding" : "holdings"}
-              </span>
-              {priced && sub.mv != null ? (
-                <span className="text-xs text-muted">· {moneyWhole(sub.mv, baseCurrency)}</span>
-              ) : null}
-            </h3>
-            <HoldingsTable holdings={hs} baseCurrency={baseCurrency} priced={priced} portfolioId={portfolioId} visibleMetricGroups={visibleMetricGroups} />
-          </div>
-        );
-      })}
+      {showBar ? (
+        <PortfolioTotalBar holdings={holdings} baseCurrency={baseCurrency} priced={priced} below={belowTotal} />
+      ) : null}
+      {groups.length <= 1 ? (
+        <HoldingsTable holdings={holdings} baseCurrency={baseCurrency} priced={priced} portfolioId={portfolioId} visibleBands={visibleBands} />
+      ) : (
+        groups.map(([label, hs]) => {
+          const sub = totalsOf(hs);
+          return (
+            <div key={label}>
+              <h3 className="mb-2 flex flex-wrap items-baseline gap-2 text-sm font-medium">
+                {label}
+                <span className="text-xs text-muted">
+                  {hs.length} {hs.length === 1 ? "holding" : "holdings"}
+                </span>
+                {priced && sub.mv != null ? (
+                  <span className="text-xs text-muted">· {moneyWhole(sub.mv, baseCurrency)}</span>
+                ) : null}
+              </h3>
+              <HoldingsTable holdings={hs} baseCurrency={baseCurrency} priced={priced} portfolioId={portfolioId} visibleBands={visibleBands} />
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }

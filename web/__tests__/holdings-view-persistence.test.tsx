@@ -66,7 +66,14 @@ describe("HoldingsView saved-view hydration", () => {
   it("defaults to asset-class + the lean Overview preset when nothing is saved", () => {
     render(<HoldingsView holdings={[h("AAPL")]} baseCurrency="USD" priced medians={null} portfolioId="p1" />);
     expect(screen.getByRole("button", { name: "By asset class" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.queryByText("30.2×")).not.toBeInTheDocument(); // Overview = Score only, no Valuation cells
+    expect(screen.queryByText("30.2×")).not.toBeInTheDocument(); // Overview = Position + Value, no Valuation cells
+  });
+
+  it("anchors the column-band control beneath the Portfolio total bar (metron-ops#118+)", () => {
+    render(<HoldingsView holdings={[h("AAPL")]} baseCurrency="USD" priced medians={null} portfolioId="p1" />);
+    // The control ("Columns") renders with the total bar, not stranded in the top toolbar.
+    expect(screen.getByText("Portfolio total")).toBeInTheDocument();
+    expect(screen.getByText("Columns")).toBeInTheDocument();
   });
 
   it("persists the full view when a control changes", () => {
@@ -75,7 +82,7 @@ describe("HoldingsView saved-view hydration", () => {
     fireEvent.click(screen.getByRole("button", { name: "By sector → country" }));
     expect(saveHoldingsViewAction).toHaveBeenCalledWith("p1", {
       grouping: "classification",
-      visible_bands: ["Score"],
+      visible_bands: ["Position", "Value"],
       combine_by_account: false,
       hidden_types: [],
     });
