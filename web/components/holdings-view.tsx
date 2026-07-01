@@ -16,7 +16,7 @@ import { GroupedByClassification } from "@/components/grouped-by-classification"
 import { GroupedHoldings } from "@/components/grouped-holdings";
 import { TypeFilterChips } from "@/components/holdings-type-filter";
 import { ColumnPresetControl, DEFAULT_VISIBLE_GROUPS } from "@/components/holdings-column-presets";
-import { METRIC_GROUP_ORDER, type MetricGroup } from "@/components/holdings-table";
+import { BAND_ORDER, type ColumnBand } from "@/components/holdings-table";
 import { saveHoldingsViewAction } from "@/app/portfolios/[id]/actions";
 import type { Holding, ValuationMedians } from "@/lib/api";
 
@@ -40,10 +40,10 @@ function initialMode(saved: string | null): Mode {
   return ALL_MODES.includes(saved as Mode) ? (saved as Mode) : "asset";
 }
 
-/** Saved band names → a valid, canonical-ordered MetricGroup[] (defaults to the lean set). */
-function initialBands(saved: string[] | null): MetricGroup[] {
+/** Saved band names → a valid, canonical-ordered ColumnBand[] (defaults to the lean set). */
+function initialBands(saved: string[] | null): ColumnBand[] {
   if (!saved || saved.length === 0) return DEFAULT_VISIBLE_GROUPS;
-  const valid = METRIC_GROUP_ORDER.filter((g) => saved.includes(g));
+  const valid = BAND_ORDER.filter((g) => saved.includes(g));
   return valid.length ? valid : DEFAULT_VISIBLE_GROUPS;
 }
 
@@ -89,7 +89,7 @@ export function HoldingsView({
   const pathname = usePathname();
   const params = useSearchParams();
   const [mode, setMode] = useState<Mode>(() => initialMode(savedGrouping));
-  const [visibleGroups, setVisibleGroups] = useState<MetricGroup[]>(() => initialBands(savedBands));
+  const [visibleGroups, setVisibleGroups] = useState<ColumnBand[]>(() => initialBands(savedBands));
   // Faceted type filter (metron-ops#115) — the set of HIDDEN security_types (empty = all
   // shown), hydrated from + persisted to the saved view like the other controls.
   const [hiddenTypes, setHiddenTypes] = useState<Set<string>>(() => new Set(savedHiddenTypes ?? []));
@@ -108,7 +108,7 @@ export function HoldingsView({
 
   // Persist the full view on any control change (fire-and-forget). Always sends every field
   // (the PUT is a full replace), defaulting unspecified facets to current state.
-  const persist = (next: { grouping?: Mode; bands?: MetricGroup[]; combine?: boolean; hidden?: string[] }) => {
+  const persist = (next: { grouping?: Mode; bands?: ColumnBand[]; combine?: boolean; hidden?: string[] }) => {
     if (!portfolioId) return;
     void saveHoldingsViewAction(portfolioId, {
       grouping: next.grouping !== undefined ? next.grouping : mode,
@@ -122,7 +122,7 @@ export function HoldingsView({
     setMode(m);
     persist({ grouping: m });
   };
-  const changeBands = (b: MetricGroup[]) => {
+  const changeBands = (b: ColumnBand[]) => {
     setVisibleGroups(b);
     persist({ bands: b });
   };
@@ -141,27 +141,28 @@ export function HoldingsView({
   // Suppress the redundant Account column when sectioning by account — the heading names it.
   const accountColumn = byAccount && effectiveMode !== "account";
 
+  // Column-band control. The grouper renders it directly UNDER the Portfolio total bar
+  // (metron-ops#118+) so the column sets read as attached to the table, not stranded in the
+  // top toolbar. Priced-only — bands are feed-gated in the cost-basis-only view.
+  const columnControl = priced ? <ColumnPresetControl value={visibleGroups} onChange={changeBands} /> : null;
+
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <CombineToggle byAccount={byAccount} onChange={changeCombine} />
-          <div className="inline-flex rounded-lg border border-line p-0.5 text-xs">
-            {modes.map((m) => (
-              <button
-                key={m.key}
-                type="button"
-                onClick={() => changeMode(m.key)}
-                className={SEG_BTN(effectiveMode === m.key)}
-                aria-pressed={effectiveMode === m.key}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <CombineToggle byAccount={byAccount} onChange={changeCombine} />
+        <div className="inline-flex rounded-lg border border-line p-0.5 text-xs">
+          {modes.map((m) => (
+            <button
+              key={m.key}
+              type="button"
+              onClick={() => changeMode(m.key)}
+              className={SEG_BTN(effectiveMode === m.key)}
+              aria-pressed={effectiveMode === m.key}
+            >
+              {m.label}
+            </button>
+          ))}
         </div>
-        {/* Column presets only matter in the priced view (metric bands are feed-gated). */}
-        {priced ? <ColumnPresetControl value={visibleGroups} onChange={changeBands} /> : null}
       </div>
       <TypeFilterChips securityTypes={securityTypes} hidden={hiddenTypes} onToggle={toggleType} />
       {filtered.length === 0 ? (
@@ -174,7 +175,8 @@ export function HoldingsView({
           baseCurrency={baseCurrency}
           priced={priced}
           portfolioId={portfolioId}
-          visibleMetricGroups={visibleGroups}
+          visibleBands={visibleGroups}
+          belowTotal={columnControl}
         />
       ) : effectiveMode === "asset" ? (
         <GroupedHoldings
@@ -182,8 +184,9 @@ export function HoldingsView({
           baseCurrency={baseCurrency}
           priced={priced}
           portfolioId={portfolioId}
-          visibleMetricGroups={visibleGroups}
+          visibleBands={visibleGroups}
           accountColumn={accountColumn}
+          belowTotal={columnControl}
         />
       ) : (
         <GroupedByClassification
@@ -192,8 +195,9 @@ export function HoldingsView({
           priced={priced}
           medians={medians}
           portfolioId={portfolioId}
-          visibleMetricGroups={visibleGroups}
+          visibleBands={visibleGroups}
           accountColumn={accountColumn}
+          belowTotal={columnControl}
         />
       )}
     </div>

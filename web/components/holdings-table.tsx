@@ -6,11 +6,12 @@
 // conversion. When a foreign holding has no cached FX rate the native value is
 // shown muted with a `*` (never silently treated as base currency).
 //
-// On a feed-entitled build the priced view adds three column bands — Valuation /
-// Fundamentals / Technicals — under a grouped two-row header (Holdings metrics). The
-// table gets wide, so the ticker column sticks left and a horizontal scrollbar is
-// mirrored at both the top and bottom of the table. Each metric is null off-feed or on a
-// coverage gap → "—" (never fabricated).
+// COLUMN MODEL (metron-ops#118+): the only always-on (frozen, sticky) column is the
+// Ticker — every other column belongs to a toggleable BAND. Position economics, value,
+// returns and classification are bands just like the feed-gated analytics (Valuation /
+// Fundamentals / …), so the column-preset control can show a lean set and the table no
+// longer forces constant horizontal scrolling. Bands render under a grouped two-row header;
+// each metric is null off-feed or on a coverage gap → "—" (never fabricated).
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
@@ -102,107 +103,254 @@ const COUNTRY_OPTIONS = [
 
 type SortValue = string | number | null;
 
-type Column = {
-  key: string;
-  label: string;
-  pricedOnly?: boolean;
-  /** Numeric columns open descending (biggest positions first). */
-  defaultDesc?: boolean;
-  /** Sort value — base-currency where available, native as a stable fallback. */
-  value: (h: Holding) => SortValue;
-  /** Plain-language definition for an ambiguously-named column — surfaced via an ⓘ
-   *  signpost in the header (metron-ops#115). Omit for self-evident columns. */
-  title?: string;
+// Portfolio totals over the base-currency aggregates (computed once per render).
+type Totals = { cost: number; mv: number; unreal: number; unrealPct: number | null; excluded: number };
+
+// Per-row context handed to each column's cell renderer — base currency, the editable
+// portfolio id, and the no-fabrication FX fallback bound to this holding.
+type RowCtx = {
+  baseCurrency: string;
+  portfolioId?: string;
+  foreign: boolean;
+  baseMoney: (base: number | null, native: number | null, fmt?: (v: number, c: string) => string) => ReactNode;
 };
 
-// Position columns — kept as bespoke cells (FX fallback, inline editors, staleness). These
-// drive the header + sort; the body renders them explicitly below.
-const COLUMNS: Column[] = [
-  { key: "ticker", label: "Ticker", value: (h) => h.ticker },
-  { key: "fx", label: "FX", value: (h) => h.currency },
-  { key: "quantity", label: "Quantity", defaultDesc: true, value: (h) => h.quantity },
+// Every column belongs to a BAND. Ticker is the lone frozen spine (not a band); the optional
+// Account column (uncombined view) pins beside it. Position / Value / Returns / Class hold the
+// position spine; the rest are the feed-gated analytics.
+export type ColumnBand =
+  | "Position"
+  | "Value"
+  | "Returns"
+  | "Class"
+  | "Score"
+  | "Valuation"
+  | "Fundamentals"
+  | "Balance Sheet"
+  | "Technicals"
+  | "Consensus";
+
+export const BAND_ORDER: ColumnBand[] = [
+  "Position",
+  "Value",
+  "Returns",
+  "Class",
+  "Score",
+  "Valuation",
+  "Fundamentals",
+  "Balance Sheet",
+  "Technicals",
+  "Consensus",
+];
+
+// Unified column descriptor. Position bands carry bespoke `cell` renderers (FX fallback,
+// inline editors, staleness); the analytic bands are adapted from METRIC_COLUMNS below.
+type ColumnDef = {
+  key: string;
+  label: string;
+  band: ColumnBand;
+  /** Priced-only — hidden in the cost-basis-only (no-feed) view. */
+  priced?: boolean;
+  /** Numeric columns open descending (biggest positions / highest values first). */
+  defaultDesc?: boolean;
+  align?: "left" | "right";
+  title?: string;
+  /** Sort value — base-currency where available, native as a stable fallback. */
+  sort: (h: Holding) => SortValue;
+  /** Cell content (the wrapping <td> supplies padding / alignment / border). */
+  cell: (h: Holding, ctx: RowCtx) => ReactNode;
+  /** Optional footer (portfolio total) cell content; omitted → blank. */
+  foot?: (t: Totals, baseCurrency: string) => ReactNode;
+};
+
+// ── Position spine columns, now band-grouped (metron-ops#118+). Each keeps the bespoke
+// rendering it had as a hard-coded cell: FX fallback (baseMoney), stale-price ⚠, accounting
+// sign coloring, and the editable ClassifyCell dropdowns. ──
+const POSITION_COLUMNS: ColumnDef[] = [
+  // Position — quantity + the cost-basis economics (available even in the unpriced view).
+  {
+    key: "quantity",
+    label: "Quantity",
+    band: "Position",
+    defaultDesc: true,
+    sort: (h) => h.quantity,
+    cell: (h) => quantity(h.quantity),
+  },
   {
     key: "avg_cost",
     label: "Avg cost",
+    band: "Position",
     defaultDesc: true,
-    value: (h) => (h.fx_rate != null ? h.avg_cost * h.fx_rate : h.avg_cost),
+    sort: (h) => (h.fx_rate != null ? h.avg_cost * h.fx_rate : h.avg_cost),
+    cell: (h, ctx) => ctx.baseMoney(h.fx_rate != null ? h.avg_cost * h.fx_rate : null, h.avg_cost),
   },
   {
     key: "cost_basis",
     label: "Cost basis",
+    band: "Position",
     defaultDesc: true,
-    value: (h) => h.cost_basis_base ?? h.cost_basis,
     title: "Total amount paid for the position (quantity × average cost), in the base currency.",
+    sort: (h) => h.cost_basis_base ?? h.cost_basis,
+    cell: (h, ctx) => ctx.baseMoney(h.cost_basis_base, h.cost_basis, moneyWhole),
+    foot: (t, ccy) => moneyWhole(t.cost, ccy),
   },
-  // Reference classification (always shown, even in the cost-basis-only view). Sorted
-  // ascending by default; an unclassified holding sorts last via the null-handling.
-  { key: "sector", label: "Sector", value: (h) => h.sector },
-  { key: "country", label: "Country", value: (h) => h.country },
-  { key: "type", label: "Type", value: (h) => h.security_type },
+  // Value — live price + market value + unrealized (priced).
   {
     key: "last",
     label: "Last",
-    pricedOnly: true,
+    band: "Value",
+    priced: true,
     defaultDesc: true,
-    value: (h) => (h.last_price != null && h.fx_rate != null ? h.last_price * h.fx_rate : h.last_price),
+    sort: (h) => (h.last_price != null && h.fx_rate != null ? h.last_price * h.fx_rate : h.last_price),
+    cell: (h, ctx) => {
+      const lastBase = h.last_price != null && h.fx_rate != null ? h.last_price * h.fx_rate : null;
+      return (
+        <span
+          className={h.last_price_stale ? "text-amber-500" : "text-muted"}
+          title={
+            h.last_price_stale && h.last_price_date
+              ? `Stale — last close ${h.last_price_date}; the market-data feed hasn’t updated since`
+              : undefined
+          }
+        >
+          {ctx.baseMoney(lastBase, h.last_price)}
+          {h.last_price_stale ? <span className="ml-0.5" aria-hidden>⚠</span> : null}
+        </span>
+      );
+    },
   },
   {
     key: "market_value",
     label: "Market value",
-    pricedOnly: true,
+    band: "Value",
+    priced: true,
     defaultDesc: true,
-    value: (h) => h.market_value ?? h.market_value_local,
+    sort: (h) => h.market_value ?? h.market_value_local,
+    cell: (h, ctx) => ctx.baseMoney(h.market_value, h.market_value_local, moneyWhole),
+    foot: (t, ccy) => moneyWhole(t.mv, ccy),
   },
   {
     key: "unrealized",
     label: "Unrealized $",
-    pricedOnly: true,
+    band: "Value",
+    priced: true,
     defaultDesc: true,
-    value: (h) => h.unrealized_gain,
     title: "Paper gain/loss if sold now: market value − cost basis (base currency). Excludes realized gains + dividends.",
+    sort: (h) => h.unrealized_gain,
+    cell: (h, ctx) => (
+      <span className={signClass(h.unrealized_gain ?? 0)}>
+        {h.unrealized_gain != null ? accountingMoneyWhole(h.unrealized_gain, ctx.baseCurrency) : "—"}
+      </span>
+    ),
+    foot: (t, ccy) => <span className={signClass(t.unreal)}>{accountingMoneyWhole(t.unreal, ccy)}</span>,
   },
   {
     key: "unrealized_pct",
     label: "Unrealized %",
-    pricedOnly: true,
+    band: "Value",
+    priced: true,
     defaultDesc: true,
-    value: (h) => h.unrealized_pct,
     title: "Unrealized gain/loss as a % of cost basis (the position's total return so far, ex-dividends).",
+    sort: (h) => h.unrealized_pct,
+    cell: (h) => (
+      <span className={signClass(h.unrealized_pct ?? 0)}>
+        {h.unrealized_pct != null ? accountingPercent(h.unrealized_pct) : "—"}
+      </span>
+    ),
+    foot: (t) => (
+      <span className={signClass(t.unrealPct ?? 0)}>{t.unrealPct != null ? accountingPercent(t.unrealPct) : "—"}</span>
+    ),
   },
-  // Per-security period returns (metron-ops#87): Day (overnight/intraday/day, feed-gated),
-  // YTD + LTM (from cached daily closes). Null → "—" (no feed / insufficient history).
+  // Returns — per-security period returns (metron-ops#87): Day (overnight/intraday), YTD, LTM.
   {
     key: "day_pct",
     label: "Day",
-    pricedOnly: true,
+    band: "Returns",
+    priced: true,
     defaultDesc: true,
-    value: (h) => h.day_pct,
     title: "Today's price return — overnight (open vs prior close) + intraday (latest vs open). Needs the live feed.",
+    sort: (h) => h.day_pct,
+    cell: (h) => (
+      <span
+        className={h.day_pct != null ? signClass(h.day_pct) : "text-muted"}
+        title={
+          h.overnight_pct != null && h.intraday_pct != null
+            ? `overnight ${accountingPercent(h.overnight_pct)} · intraday ${accountingPercent(h.intraday_pct)}`
+            : undefined
+        }
+      >
+        {h.day_pct != null ? accountingPercent(h.day_pct) : "—"}
+      </span>
+    ),
   },
   {
     key: "ytd_pct",
     label: "YTD",
-    pricedOnly: true,
+    band: "Returns",
+    priced: true,
     defaultDesc: true,
-    value: (h) => h.ytd_pct,
     title: "Price return year-to-date (since the last close of the prior year), from cached daily closes.",
+    sort: (h) => h.ytd_pct,
+    cell: (h) => (
+      <span className={h.ytd_pct != null ? signClass(h.ytd_pct) : "text-muted"}>
+        {h.ytd_pct != null ? accountingPercent(h.ytd_pct) : "—"}
+      </span>
+    ),
   },
   {
     key: "ltm_pct",
     label: "LTM",
-    pricedOnly: true,
+    band: "Returns",
+    priced: true,
     defaultDesc: true,
-    value: (h) => h.ltm_pct,
     title: "Price return over the last twelve months (trailing 1-year), from cached daily closes.",
+    sort: (h) => h.ltm_pct,
+    cell: (h) => (
+      <span className={h.ltm_pct != null ? signClass(h.ltm_pct) : "text-muted"}>
+        {h.ltm_pct != null ? accountingPercent(h.ltm_pct) : "—"}
+      </span>
+    ),
+  },
+  // Class — currency + the editable reference classification (sector / country / type). These
+  // resolve without a market feed, so the band shows in the cost-basis-only view too.
+  {
+    key: "fx",
+    label: "FX",
+    band: "Class",
+    sort: (h) => h.currency,
+    cell: (h, ctx) => (
+      <span className="text-muted">
+        {ctx.foreign ? `${h.currency} @ ${h.fx_rate != null ? fxRate(h.fx_rate) : "—"}` : h.currency}
+      </span>
+    ),
+  },
+  {
+    key: "sector",
+    label: "Sector",
+    band: "Class",
+    sort: (h) => h.sector,
+    cell: (h, ctx) => <ClassifyCellContent h={h} field="sector" portfolioId={ctx.portfolioId} />,
+  },
+  {
+    key: "country",
+    label: "Country",
+    band: "Class",
+    sort: (h) => h.country,
+    cell: (h, ctx) => <ClassifyCellContent h={h} field="country" portfolioId={ctx.portfolioId} />,
+  },
+  {
+    key: "type",
+    label: "Type",
+    band: "Class",
+    sort: (h) => h.security_type,
+    cell: (h, ctx) => <ClassifyCellContent h={h} field="type" portfolioId={ctx.portfolioId} />,
   },
 ];
-
-export type MetricGroup = "Score" | "Valuation" | "Fundamentals" | "Balance Sheet" | "Technicals" | "Consensus";
 
 type MetricColumn = {
   key: string;
   label: string;
-  group: MetricGroup;
+  group: ColumnBand;
   value: (h: Holding) => number | null;
   /** Cell content from the non-null value (callers never see null — "—" is rendered). */
   render: (v: number, baseCurrency: string) => string;
@@ -235,8 +383,8 @@ const attractivenessTone = (v: number): string =>
   v >= 60 ? "text-positive" : v <= 40 ? "text-negative" : "";
 
 const METRIC_COLUMNS: MetricColumn[] = [
-  // ── Score (headline) — composite attractiveness (metron-ops#106, Phase 2). The first metric
-  // band so it heads the priced view; a transparent 0–100 blend of the columns that follow. ──
+  // ── Score (headline) — composite attractiveness (metron-ops#106, Phase 2). A transparent
+  // 0–100 blend of the columns that follow. ──
   {
     key: "attractiveness",
     label: "Score",
@@ -291,19 +439,37 @@ const METRIC_COLUMNS: MetricColumn[] = [
   { key: "news_sentiment", label: "Sentiment", group: "Consensus", value: (h) => h.news_sentiment, render: (v) => decimal(v, 2), signed: true, title: "News sentiment — trust-weighted Loughran-McDonald composite ∈ [-1, +1]" },
 ];
 
-export const METRIC_GROUP_ORDER: MetricGroup[] = ["Score", "Valuation", "Fundamentals", "Balance Sheet", "Technicals", "Consensus"];
+/** Adapt a declarative MetricColumn (value/render/tone/text) into a unified ColumnDef so the
+ *  analytic bands render through the same loop as the position bands. */
+function metricToColumnDef(c: MetricColumn): ColumnDef {
+  return {
+    key: c.key,
+    label: c.label,
+    band: c.group,
+    priced: true,
+    defaultDesc: true,
+    align: "right",
+    title: c.title,
+    sort: c.value,
+    cell: (h, ctx) => {
+      const v = c.value(h);
+      const tone = v == null ? "text-muted" : c.tone ? c.tone(v) : c.signed ? signClass(v) : "";
+      // Categorical columns (e.g. the consensus rating) render their own label; numeric
+      // columns render from the non-null value.
+      const content = c.text ? c.text(h) : v == null ? null : c.render(v, ctx.baseCurrency);
+      return <span className={content == null ? "text-muted" : tone}>{content == null ? "—" : content}</span>;
+    },
+  };
+}
 
-// Lookup over EVERY sortable column (position + metric), so header clicks sort uniformly.
-const SORT_BY_KEY = new Map<string, (h: Holding) => SortValue>([
-  ...COLUMNS.map((c) => [c.key, c.value] as const),
-  ...METRIC_COLUMNS.map((c) => [c.key, c.value] as const),
-]);
-const DESC_BY_DEFAULT = new Set<string>([
-  ...COLUMNS.filter((c) => c.defaultDesc).map((c) => c.key),
-  ...METRIC_COLUMNS.map((c) => c.key), // all metrics open descending
-]);
+// Every column (position spine + analytics) in one list, keyed by band for the grouped header.
+const ALL_COLUMNS: ColumnDef[] = [...POSITION_COLUMNS, ...METRIC_COLUMNS.map(metricToColumnDef)];
 
-// Sticky first (ticker) column — stays put while the wide metric bands scroll right.
+// Lookup over EVERY sortable column, so header clicks sort uniformly.
+const SORT_BY_KEY = new Map<string, (h: Holding) => SortValue>(ALL_COLUMNS.map((c) => [c.key, c.sort] as const));
+const DESC_BY_DEFAULT = new Set<string>(ALL_COLUMNS.filter((c) => c.defaultDesc).map((c) => c.key));
+
+// Sticky first (ticker) column — stays put while the bands scroll right.
 const STICKY = "sticky left-0 z-10";
 
 export function HoldingsTable({
@@ -311,7 +477,7 @@ export function HoldingsTable({
   baseCurrency,
   priced,
   portfolioId,
-  visibleMetricGroups = METRIC_GROUP_ORDER,
+  visibleBands = BAND_ORDER,
   accountColumn = false,
 }: {
   holdings: Holding[];
@@ -319,25 +485,22 @@ export function HoldingsTable({
   priced: boolean;
   /** When set, the Ticker cell exposes an inline alias editor (metron-ops#47). */
   portfolioId?: string;
-  /** Which metric bands to render, in canonical order (column presets, metron-ops#114).
-   *  Defaults to every band; the position spine is always shown. */
-  visibleMetricGroups?: MetricGroup[];
+  /** Which bands to render, in canonical order (column presets, metron-ops#114/#118+).
+   *  Defaults to every band; the Ticker spine is always shown. */
+  visibleBands?: ColumnBand[];
   /** Render an Account column (the uncombined per-account view, metron-ops#114). The rows
-   *  must carry `account_label`; sits in the position spine right after Ticker. */
+   *  must carry `account_label`; it pins beside Ticker in the frozen spine. */
   accountColumn?: boolean;
 }) {
-  const positionColumns = priced ? COLUMNS : COLUMNS.filter((c) => !c.pricedOnly);
-  // Optional Account column injected after Ticker (the uncombined view). Kept out of the
-  // shared COLUMNS so the consolidated view + its sort map are untouched.
-  const headerPositionCols: { key: string; label: string; title?: string }[] = accountColumn
-    ? [positionColumns[0], { key: "account", label: "Account" }, ...positionColumns.slice(1)]
-    : positionColumns;
-  // Metric bands only in the priced view (they're feed-gated; the cost-basis-only view
-  // stays exactly as before).
-  const showMetrics = priced;
-  // The visible bands, normalized to canonical order, with the matching metric columns.
-  const visibleGroups = METRIC_GROUP_ORDER.filter((g) => visibleMetricGroups.includes(g));
-  const visibleMetricCols = METRIC_COLUMNS.filter((c) => visibleGroups.includes(c.group));
+  // Visible columns grouped by band, in canonical order, with priced-only bands dropped in
+  // the cost-basis-only view (a band whose every column is priced collapses to nothing).
+  const visibleSet = new Set(visibleBands);
+  const colsByBand = BAND_ORDER.filter((b) => visibleSet.has(b))
+    .map((b) => [b, ALL_COLUMNS.filter((c) => c.band === b && (priced || !c.priced))] as const)
+    .filter(([, cols]) => cols.length > 0);
+  const visibleColumns = colsByBand.flatMap(([, cols]) => cols);
+  const spineCols = 1 + (accountColumn ? 1 : 0);
+
   const [sort, setSort] = useState<{ key: string; desc: boolean } | null>(null);
 
   const sorted = useMemo(() => {
@@ -366,7 +529,7 @@ export function HoldingsTable({
   // Portfolio totals over the base-currency aggregates. A foreign holding with no
   // cached FX rate has no base value — it is EXCLUDED from the sum (never fabricated as
   // base), and the totals row flags `*` so the number is read as a partial total.
-  const totals = useMemo(() => {
+  const totals = useMemo<Totals>(() => {
     let cost = 0;
     let mv = 0;
     let unreal = 0;
@@ -386,9 +549,10 @@ export function HoldingsTable({
     return { cost, mv, unreal, unrealPct, excluded };
   }, [holdings, baseCurrency, priced]);
 
-  // Header sort-button (shared by the position + metric column headers).
+  // Header sort-button (shared by the spine + band column headers).
   // `title` is the column's plain-language DEFINITION (when it has one): the header shows a
-  // small ⓘ signpost so the definition is discoverable, not hidden behind a hover-the-label.
+  // small ⓘ signpost so the definition is discoverable, not hidden behind a hover-the-label
+  // (metron-ops#115).
   const SortTh = ({ colKey, label, title }: { colKey: string; label: string; title?: string }) => (
     <button
       type="button"
@@ -408,52 +572,44 @@ export function HoldingsTable({
     </button>
   );
 
-  const metricsByGroup = visibleGroups.map(
-    (g) => [g, METRIC_COLUMNS.filter((c) => c.group === g)] as const,
-  );
-
   return (
-    <DualScroll deps={`${headerPositionCols.length}:${holdings.length}:${showMetrics}:${visibleMetricCols.length}`}>
+    <DualScroll deps={`${spineCols}:${holdings.length}:${priced}:${visibleColumns.length}`}>
       <table className="w-full text-sm">
         <thead className="sticky top-0 z-20">
-          {showMetrics ? (
-            // Group-band row: spans Position + each metric band.
+          {colsByBand.length > 0 ? (
+            // Band-label row: an empty cell over the Ticker spine, then one cell per band.
             <tr className="border-b border-line bg-surface text-left text-[10px] uppercase tracking-wider text-muted">
-              <th colSpan={headerPositionCols.length} className={`${STICKY} bg-surface px-3 py-1.5 font-semibold`}>
-                Position
-              </th>
-              {metricsByGroup.map(([group, cols]) => (
+              <th colSpan={spineCols} className={`${STICKY} bg-surface px-3 py-1.5`} />
+              {colsByBand.map(([band, cols]) => (
                 <th
-                  key={group}
+                  key={band}
                   colSpan={cols.length}
                   className="border-l border-line px-3 py-1.5 text-center font-semibold text-accent"
                 >
-                  {group}
+                  {band}
                 </th>
               ))}
             </tr>
           ) : null}
           <tr className="border-b border-line bg-surface text-left text-xs uppercase tracking-wide text-muted">
-            {headerPositionCols.map((col, i) => (
-              <th
-                key={col.key}
-                className={`px-3 py-2 font-medium ${i === 0 ? `${STICKY} bg-surface` : col.key === "account" ? "text-left" : "text-right"}`}
-              >
-                <SortTh colKey={col.key} label={col.label} title={col.title} />
+            <th className={`${STICKY} bg-surface px-3 py-2 font-medium`}>
+              <SortTh colKey="ticker" label="Ticker" />
+            </th>
+            {accountColumn ? (
+              <th className="px-3 py-2 text-left font-medium">
+                <SortTh colKey="account" label="Account" />
               </th>
-            ))}
-            {showMetrics
-              ? metricsByGroup.map(([, cols]) =>
-                  cols.map((col, j) => (
-                    <th
-                      key={col.key}
-                      className={`px-3 py-2 text-right font-medium ${j === 0 ? "border-l border-line" : ""}`}
-                    >
-                      <SortTh colKey={col.key} label={col.label} title={col.title} />
-                    </th>
-                  )),
-                )
-              : null}
+            ) : null}
+            {colsByBand.map(([, cols]) =>
+              cols.map((col, j) => (
+                <th
+                  key={col.key}
+                  className={`px-3 py-2 font-medium ${col.align === "left" ? "text-left" : "text-right"} ${j === 0 ? "border-l border-line" : ""}`}
+                >
+                  <SortTh colKey={col.key} label={col.label} title={col.title} />
+                </th>
+              )),
+            )}
           </tr>
         </thead>
         <tbody>
@@ -476,8 +632,7 @@ export function HoldingsTable({
                 </span>
               );
             };
-            const avgCostBase = h.fx_rate != null ? h.avg_cost * h.fx_rate : null;
-            const lastBase = h.last_price != null && h.fx_rate != null ? h.last_price * h.fx_rate : null;
+            const ctx: RowCtx = { baseCurrency, portfolioId, foreign, baseMoney };
             return (
               <tr key={h.ticker} className="border-b border-line last:border-0">
                 <td className={`${STICKY} bg-paper px-3 py-2 font-medium`}>
@@ -486,84 +641,17 @@ export function HoldingsTable({
                 {accountColumn ? (
                   <td className="px-3 py-2 text-left text-muted">{h.account_label ?? "—"}</td>
                 ) : null}
-                <td className="px-3 py-2 text-right text-muted">
-                  {foreign ? `${h.currency} @ ${h.fx_rate != null ? fxRate(h.fx_rate) : "—"}` : h.currency}
-                </td>
-                <td className="px-3 py-2 text-right tabular-nums">{quantity(h.quantity)}</td>
-                <td className="px-3 py-2 text-right tabular-nums">{baseMoney(avgCostBase, h.avg_cost)}</td>
-                <td className="px-3 py-2 text-right tabular-nums">
-                  {baseMoney(h.cost_basis_base, h.cost_basis, moneyWhole)}
-                </td>
-                <ClassifyCell h={h} field="sector" portfolioId={portfolioId} />
-                <ClassifyCell h={h} field="country" portfolioId={portfolioId} />
-                <ClassifyCell h={h} field="type" portfolioId={portfolioId} />
-                {priced ? (
-                  <>
+                {colsByBand.map(([, cols]) =>
+                  cols.map((col, j) => (
                     <td
-                      className={`px-3 py-2 text-right tabular-nums ${h.last_price_stale ? "text-amber-500" : "text-muted"}`}
-                      title={
-                        h.last_price_stale && h.last_price_date
-                          ? `Stale — last close ${h.last_price_date}; the market-data feed hasn’t updated since`
-                          : undefined
-                      }
+                      key={col.key}
+                      className={`px-3 py-2 tabular-nums ${col.align === "left" ? "text-left" : "text-right"} ${j === 0 ? "border-l border-line" : ""}`}
+                      title={col.title}
                     >
-                      {baseMoney(lastBase, h.last_price)}
-                      {h.last_price_stale ? <span className="ml-0.5" aria-hidden>⚠</span> : null}
+                      {col.cell(h, ctx)}
                     </td>
-                    <td className="px-3 py-2 text-right tabular-nums">
-                      {baseMoney(h.market_value, h.market_value_local, moneyWhole)}
-                    </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${signClass(h.unrealized_gain ?? 0)}`}>
-                      {h.unrealized_gain != null ? accountingMoneyWhole(h.unrealized_gain, baseCurrency) : "—"}
-                    </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${signClass(h.unrealized_pct ?? 0)}`}>
-                      {h.unrealized_pct != null ? accountingPercent(h.unrealized_pct) : "—"}
-                    </td>
-                    <td
-                      className={`px-3 py-2 text-right tabular-nums ${h.day_pct != null ? signClass(h.day_pct) : "text-muted"}`}
-                      title={
-                        h.overnight_pct != null && h.intraday_pct != null
-                          ? `overnight ${accountingPercent(h.overnight_pct)} · intraday ${accountingPercent(h.intraday_pct)}`
-                          : undefined
-                      }
-                    >
-                      {h.day_pct != null ? accountingPercent(h.day_pct) : "—"}
-                    </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${h.ytd_pct != null ? signClass(h.ytd_pct) : "text-muted"}`}>
-                      {h.ytd_pct != null ? accountingPercent(h.ytd_pct) : "—"}
-                    </td>
-                    <td className={`px-3 py-2 text-right tabular-nums ${h.ltm_pct != null ? signClass(h.ltm_pct) : "text-muted"}`}>
-                      {h.ltm_pct != null ? accountingPercent(h.ltm_pct) : "—"}
-                    </td>
-                  </>
-                ) : null}
-                {showMetrics
-                  ? metricsByGroup.map(([, cols]) =>
-                      cols.map((col, j) => {
-                        const v = col.value(h);
-                        const tone =
-                          v == null
-                            ? "text-muted"
-                            : col.tone
-                              ? col.tone(v)
-                              : col.signed
-                                ? signClass(v)
-                                : "";
-                        // Categorical columns (e.g. the consensus rating) render their own
-                        // label; numeric columns render from the non-null value.
-                        const cell = col.text ? col.text(h) : v == null ? null : col.render(v, baseCurrency);
-                        return (
-                          <td
-                            key={col.key}
-                            className={`px-3 py-2 text-right tabular-nums ${j === 0 ? "border-l border-line" : ""} ${cell == null ? "text-muted" : tone}`}
-                            title={col.title}
-                          >
-                            {cell == null ? "—" : cell}
-                          </td>
-                        );
-                      }),
-                    )
-                  : null}
+                  )),
+                )}
               </tr>
             );
           })}
@@ -578,32 +666,16 @@ export function HoldingsTable({
                 Total{totals.excluded > 0 ? "*" : ""}
               </td>
               {accountColumn ? <td className="px-3 py-2" /> : null}
-              <td className="px-3 py-2" />
-              <td className="px-3 py-2" />
-              <td className="px-3 py-2" />
-              <td className="px-3 py-2 text-right tabular-nums">{moneyWhole(totals.cost, baseCurrency)}</td>
-              {/* Sector / Country / Type are per-security labels — no portfolio total. */}
-              <td className="px-3 py-2" />
-              <td className="px-3 py-2" />
-              <td className="px-3 py-2" />
-              {priced ? (
-                <>
-                  <td className="px-3 py-2" />
-                  <td className="px-3 py-2 text-right tabular-nums">{moneyWhole(totals.mv, baseCurrency)}</td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${signClass(totals.unreal)}`}>
-                    {accountingMoneyWhole(totals.unreal, baseCurrency)}
+              {colsByBand.map(([, cols]) =>
+                cols.map((col, j) => (
+                  <td
+                    key={col.key}
+                    className={`px-3 py-2 text-right tabular-nums ${j === 0 ? "border-l border-line" : ""}`}
+                  >
+                    {col.foot ? col.foot(totals, baseCurrency) : null}
                   </td>
-                  <td className={`px-3 py-2 text-right tabular-nums ${signClass(totals.unrealPct ?? 0)}`}>
-                    {totals.unrealPct != null ? accountingPercent(totals.unrealPct) : "—"}
-                  </td>
-                  {/* Day / YTD / LTM are per-security returns — no meaningful portfolio total. */}
-                  <td className="px-3 py-2" />
-                  <td className="px-3 py-2" />
-                  <td className="px-3 py-2" />
-                </>
-              ) : null}
-              {/* Metric columns are per-security — no portfolio total. */}
-              {showMetrics ? visibleMetricCols.map((c) => <td key={c.key} className="px-3 py-2" />) : null}
+                )),
+              )}
             </tr>
           </tfoot>
         ) : null}
@@ -664,12 +736,13 @@ function DualScroll({ children, deps }: { children: ReactNode; deps: string }) {
   );
 }
 
-/** The Sector / Country cell. With a portfolioId it's editable: an UNCLASSIFIED holding
- *  shows a "Set …" dropdown directly (the gap the user wants to fill); a classified one
- *  shows the value with a small ✎ to correct it. Choosing the blank option clears the
- *  override (reverts to the spine-resolved value). Read-only contexts just render the
- *  value. The override is tenant-scoped (it never mutates the shared reference row). */
-function ClassifyCell({
+/** The Sector / Country / Type cell content (no <td> — the band loop wraps it). With a
+ *  portfolioId it's editable: an UNCLASSIFIED holding shows a "Set …" dropdown directly (the
+ *  gap the user wants to fill); a classified one shows the value with a small ✎ to correct it.
+ *  Choosing the blank option clears the override (reverts to the spine-resolved value).
+ *  Read-only contexts just render the value. The override is tenant-scoped (it never mutates
+ *  the shared reference row). */
+function ClassifyCellContent({
   h,
   field,
   portfolioId,
@@ -689,7 +762,7 @@ function ClassifyCell({
 
   // Read-only context (no portfolioId) — just the value.
   if (!portfolioId) {
-    return <td className="px-3 py-2 text-right text-muted">{display ?? "—"}</td>;
+    return <span className="text-muted">{display ?? "—"}</span>;
   }
 
   // Options as {value,label}: a curated list for sector/country (value == label, current
@@ -722,7 +795,7 @@ function ClassifyCell({
   const showSelect = value == null || editing;
   if (showSelect) {
     return (
-      <td className="px-3 py-2 text-right">
+      <>
         <select
           value={value ?? ""}
           disabled={pending}
@@ -738,25 +811,23 @@ function ClassifyCell({
           ))}
         </select>
         {error ? <div className="mt-0.5 text-[10px] text-negative">{error}</div> : null}
-      </td>
+      </>
     );
   }
 
   return (
-    <td className="px-3 py-2 text-right text-muted">
-      <span className="inline-flex items-center gap-1">
-        {display}
-        <button
-          type="button"
-          onClick={() => setEditing(true)}
-          aria-label={`Edit ${field} for ${h.ticker}`}
-          title={`Edit ${field}`}
-          className="text-xs text-muted/70 transition hover:text-ink"
-        >
-          ✎
-        </button>
-      </span>
-    </td>
+    <span className="inline-flex items-center gap-1 text-muted">
+      {display}
+      <button
+        type="button"
+        onClick={() => setEditing(true)}
+        aria-label={`Edit ${field} for ${h.ticker}`}
+        title={`Edit ${field}`}
+        className="text-xs text-muted/70 transition hover:text-ink"
+      >
+        ✎
+      </button>
+    </span>
   );
 }
 

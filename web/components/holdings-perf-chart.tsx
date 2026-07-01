@@ -19,6 +19,9 @@ const RANGES: ReadonlyArray<readonly [string, number | null]> = [
   ["3M", 90],
   ["6M", 180],
   ["1Y", 365],
+  ["3Y", 1095],
+  ["5Y", 1825],
+  ["10Y", 3650],
   ["All", null],
 ];
 

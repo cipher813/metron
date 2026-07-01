@@ -1,5 +1,6 @@
-// Column presets (metron-ops#114): HoldingsTable renders only the visible metric bands,
-// and ColumnPresetControl drives the visible-band set from presets + the Customize popover.
+// Column presets (metron-ops#114, #118+): HoldingsTable renders only the visible bands over
+// the always-on Ticker spine, and ColumnPresetControl drives the visible-band set from
+// presets + the Customize popover.
 
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
@@ -40,9 +41,9 @@ const h = (ticker: string, over: Partial<Holding> = {}): Holding =>
     ...over,
   }) as Holding;
 
-describe("HoldingsTable visibleMetricGroups", () => {
-  it("shows only the requested bands (Score-only default hides Valuation/Technicals)", () => {
-    render(<HoldingsTable baseCurrency="USD" priced holdings={[h("AAPL")]} visibleMetricGroups={["Score"]} />);
+describe("HoldingsTable visibleBands", () => {
+  it("shows only the requested bands (Score-only hides Valuation/Technicals)", () => {
+    render(<HoldingsTable baseCurrency="USD" priced holdings={[h("AAPL")]} visibleBands={["Score"]} />);
     expect(screen.getAllByText("Score").length).toBeGreaterThan(0); // band header + column label
     expect(screen.queryByText("Valuation")).not.toBeInTheDocument();
     expect(screen.queryByText("Technicals")).not.toBeInTheDocument();
@@ -50,7 +51,7 @@ describe("HoldingsTable visibleMetricGroups", () => {
   });
 
   it("shows a band when it's in the visible set", () => {
-    render(<HoldingsTable baseCurrency="USD" priced holdings={[h("AAPL")]} visibleMetricGroups={["Score", "Valuation"]} />);
+    render(<HoldingsTable baseCurrency="USD" priced holdings={[h("AAPL")]} visibleBands={["Score", "Valuation"]} />);
     expect(screen.getByText("Valuation")).toBeInTheDocument();
     expect(screen.getByText("30.2×")).toBeInTheDocument(); // P/E now visible
     expect(screen.queryByText("Technicals")).not.toBeInTheDocument(); // still hidden
@@ -64,30 +65,30 @@ describe("HoldingsTable visibleMetricGroups", () => {
 });
 
 describe("ColumnPresetControl", () => {
-  it("the default visible groups match the lean Overview preset (Score only)", () => {
-    expect(DEFAULT_VISIBLE_GROUPS).toEqual(["Score"]);
+  it("the default visible groups match the lean Overview preset (Position + Value)", () => {
+    expect(DEFAULT_VISIBLE_GROUPS).toEqual(["Position", "Value"]);
     expect(COLUMN_PRESETS[0].key).toBe("overview");
   });
 
   it("clicking a preset emits its canonical-ordered band set", () => {
     const onChange = vi.fn();
-    render(<ColumnPresetControl value={["Score"]} onChange={onChange} />);
+    render(<ColumnPresetControl value={["Position", "Value"]} onChange={onChange} />);
     fireEvent.click(screen.getByRole("button", { name: "Fundamentals" }));
-    expect(onChange).toHaveBeenCalledWith(["Score", "Fundamentals", "Balance Sheet"]);
+    expect(onChange).toHaveBeenCalledWith(["Position", "Value", "Score", "Fundamentals", "Balance Sheet"]);
   });
 
-  it("toggling a Customize band adds it (Score stays pinned, canonical order)", () => {
+  it("toggling a Customize band adds it in canonical order", () => {
     const onChange = vi.fn();
-    render(<ColumnPresetControl value={["Score"]} onChange={onChange} />);
+    render(<ColumnPresetControl value={["Position", "Value"]} onChange={onChange} />);
     // jsdom doesn't toggle <details> on summary click — open it directly.
     const details = screen.getByText("Customize").closest("details");
     if (details) details.open = true;
     fireEvent.click(screen.getByRole("checkbox", { name: "Technicals" }));
-    expect(onChange).toHaveBeenCalledWith(["Score", "Technicals"]);
+    expect(onChange).toHaveBeenCalledWith(["Position", "Value", "Technicals"]);
   });
 
   it("marks the active preset via aria-pressed", () => {
-    render(<ColumnPresetControl value={["Score", "Valuation"]} onChange={vi.fn()} />);
+    render(<ColumnPresetControl value={["Position", "Value", "Score", "Valuation"]} onChange={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Valuation" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "Overview" })).toHaveAttribute("aria-pressed", "false");
   });

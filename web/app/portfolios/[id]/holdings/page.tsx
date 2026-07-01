@@ -128,7 +128,7 @@ async function AccountsSection({
   if (!accounts) return null;
   return (
     <Section title="Accounts">
-      <AccountPanel accounts={accounts} baseCurrency={ccy} portfolioId={id} />
+      <AccountPanel accounts={accounts} baseCurrency={ccy} portfolioId={id} deletable />
       {scoped ? (
         <p className="mt-2 text-xs text-muted">
           Showing {nSelected} of {accounts.length} account{accounts.length === 1 ? "" : "s"} — the holdings below

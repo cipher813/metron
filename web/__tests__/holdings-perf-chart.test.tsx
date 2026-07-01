@@ -63,6 +63,13 @@ describe("HoldingsPerfChart", () => {
     expect(screen.getAllByText("since tracking").length).toBe(1);
   });
 
+  it("offers the long-horizon ranges (3Y / 5Y / 10Y) alongside the shorter ones", () => {
+    render(<HoldingsPerfChart accounts={accounts} benchmarks={[]} benchmarksAvailable={false} />);
+    for (const label of ["1M", "1Y", "3Y", "5Y", "10Y", "All"]) {
+      expect(screen.getByRole("button", { name: label })).toBeTruthy();
+    }
+  });
+
   it("shows the empty message when no account has enough history for the range", () => {
     const thin: AccountSeries[] = [{ account_id: "a1", name: "Brokerage", coverage: "forward", points: pts([["2024-01-01", 1]]) }];
     render(<HoldingsPerfChart accounts={thin} benchmarks={[]} benchmarksAvailable={false} />);

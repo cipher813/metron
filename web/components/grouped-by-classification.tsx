@@ -7,9 +7,11 @@
 // Presentational; the median bands come from the feed-gated valuation-medians artifact
 // (empty off a feed-entitled build → the bands show "—" but the grouping still works).
 
-import { HoldingsTable, type MetricGroup } from "@/components/holdings-table";
+import type { ReactNode } from "react";
+import { HoldingsTable, type ColumnBand } from "@/components/holdings-table";
+import { PortfolioTotalBar } from "@/components/portfolio-total-bar";
 import type { GroupMedians, Holding, ValuationMedians } from "@/lib/api";
-import { accountingMoneyWhole, moneyWhole, multiple, pct1, signClass } from "@/lib/format";
+import { multiple, pct1 } from "@/lib/format";
 
 const UNCLASSIFIED = "Unclassified";
 
@@ -67,69 +69,33 @@ function MedianBand({ m, scope }: { m: GroupMedians | undefined; scope: string }
   );
 }
 
-function GrandTotalBar({ holdings, baseCurrency, priced }: { holdings: Holding[]; baseCurrency: string; priced: boolean }) {
-  let cost = 0;
-  let mv = 0;
-  let unreal = 0;
-  let haveCost = false;
-  let haveMv = false;
-  let haveUnreal = false;
-  for (const h of holdings) {
-    if (h.cost_basis_base != null) { cost += h.cost_basis_base; haveCost = true; }
-    if (h.market_value != null) { mv += h.market_value; haveMv = true; }
-    if (h.unrealized_gain != null) { unreal += h.unrealized_gain; haveUnreal = true; }
-  }
-  const pct = haveUnreal && haveCost && cost ? unreal / cost : null;
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-1 rounded-lg border border-line bg-surface px-4 py-3 text-sm">
-      <span className="text-xs font-medium uppercase tracking-wide text-muted">Portfolio total</span>
-      <div className="flex flex-wrap items-baseline gap-x-6 tabular-nums">
-        <span>
-          <span className="text-[10px] uppercase tracking-wide text-muted">Cost </span>
-          {haveCost ? moneyWhole(cost, baseCurrency) : "—"}
-        </span>
-        {priced ? (
-          <>
-            <span>
-              <span className="text-[10px] uppercase tracking-wide text-muted">Market </span>
-              {haveMv ? moneyWhole(mv, baseCurrency) : "—"}
-            </span>
-            <span className={haveUnreal ? signClass(unreal) : "text-muted"}>
-              <span className="text-[10px] uppercase tracking-wide text-muted">Unrealized </span>
-              {haveUnreal ? accountingMoneyWhole(unreal, baseCurrency) : "—"}
-              {pct != null ? <span className="ml-1 text-xs">{pct1(pct)}</span> : null}
-            </span>
-          </>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
 export function GroupedByClassification({
   holdings,
   baseCurrency,
   priced,
   medians,
   portfolioId,
-  visibleMetricGroups,
+  visibleBands,
   accountColumn,
+  belowTotal,
 }: {
   holdings: Holding[];
   baseCurrency: string;
   priced: boolean;
   medians: ValuationMedians | null;
   portfolioId?: string;
-  /** Column-preset bands threaded to every HoldingsTable (metron-ops#114). */
-  visibleMetricGroups?: MetricGroup[];
+  /** Column-preset bands threaded to every HoldingsTable (metron-ops#114/#118+). */
+  visibleBands?: ColumnBand[];
   /** Uncombined per-account view — render the Account column (metron-ops#114). */
   accountColumn?: boolean;
+  /** Rendered under the Portfolio total bar (the column-band control, metron-ops#118+). */
+  belowTotal?: ReactNode;
 }) {
   const sectors = partition(holdings, "sector");
 
   return (
     <div className="space-y-6">
-      <GrandTotalBar holdings={holdings} baseCurrency={baseCurrency} priced={priced} />
+      <PortfolioTotalBar holdings={holdings} baseCurrency={baseCurrency} priced={priced} below={belowTotal} />
       {sectors.map(([sector, sectorHoldings]) => {
         const countries = partition(sectorHoldings, "country");
         return (
@@ -156,7 +122,7 @@ export function GroupedByClassification({
                   baseCurrency={baseCurrency}
                   priced={priced}
                   portfolioId={portfolioId}
-                  visibleMetricGroups={visibleMetricGroups}
+                  visibleBands={visibleBands}
                   accountColumn={accountColumn}
                 />
               </div>
