@@ -19,7 +19,7 @@ vi.mock("@/app/portfolios/[id]/actions", () => ({
 import { WatchlistPanel } from "@/components/watchlist-panel";
 import type { WatchlistEntry } from "@/lib/api";
 
-// Metric fields (metron-ops#123) are irrelevant to this component's read-only reference-data
+// Metric fields (metron-ops#121) are irrelevant to this component's read-only reference-data
 // panel — every entry gets the same all-null block, only symbol/name/sector/held/note vary.
 const EMPTY_METRICS = {
   country: null,

@@ -506,7 +506,7 @@ export function HoldingsTable({
    *  comparison-only row set (e.g. the watchlist) passes false to drop the row entirely. */
   showTotals?: boolean;
   /** When set, renders a trailing "Remove" column (e.g. the watchlist compare table,
-   *  metron-ops#123) — absent for the read-only Holdings view. */
+   *  metron-ops#121) — absent for the read-only Holdings view. */
   onRemove?: (ticker: string) => void;
 }) {
   // Visible columns grouped by band, in canonical order, with priced-only bands dropped in

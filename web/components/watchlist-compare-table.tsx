@@ -1,6 +1,6 @@
 "use client";
 
-// Watchlist comparison table (metron-ops#123) — add tickers you don't hold and sort them
+// Watchlist comparison table (metron-ops#121) — add tickers you don't hold and sort them
 // alongside the Holdings metrics (valuation/fundamentals/balance-sheet/technicals/
 // consensus/attractiveness) for side-by-side comparison. Renders through the SAME
 // HoldingsTable column/band/sort machinery as real positions, restricted to the

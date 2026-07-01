@@ -4,7 +4,7 @@ Positions-optional, so the product is useful with zero account data. Each entry 
 symbol + reference data (name / sector / country / next earnings, from the Security master)
 and whether it's currently held, plus — on a feed-entitled build — the SAME valuation /
 fundamentals / balance-sheet / technicals / consensus / attractiveness metrics the Holdings
-table shows (metron-ops#123), via ``api.services.metrics_enrichment`` keyed purely by
+table shows (metron-ops#121), via ``api.services.metrics_enrichment`` keyed purely by
 ticker. No live price and NO position economics (quantity/cost/market value/P&L) ever
 attach to a watchlist entry — comparison-only, structurally isolated from NAV/performance
 (those read the Position table directly and never call this module or metrics_enrichment).

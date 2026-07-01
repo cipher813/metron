@@ -570,7 +570,7 @@ class WatchlistEntryOut(BaseModel):
     next_earnings_date: date | None = None
     held: bool = False
     note: str | None = None
-    # Same Holdings-metrics fields as HoldingOut (metron-ops#123) — populated only on a
+    # Same Holdings-metrics fields as HoldingOut (metron-ops#121) — populated only on a
     # feed-entitled build; None off-feed or on a coverage gap, never fabricated. No
     # quantity/avg_cost/market_value/P&L fields — a watchlist entry has no position.
     market_cap: float | None = None
@@ -2382,7 +2382,7 @@ def get_watchlist(
     (name / sector / country / next earnings) + a held flag, plus — on a feed-entitled
     build — the same Holdings metrics (valuation/fundamentals/technicals/consensus/
     attractiveness) for side-by-side comparison against real holdings (metron-ops#42,
-    metron-ops#123). No live price: un-held tickers have no price source until the
+    metron-ops#121). No live price: un-held tickers have no price source until the
     licensed Pro feed lands."""
     return watchlist.list_watchlist(
         session, portfolio.tenant_id, portfolio.id, feed_entitled=settings.feed_entitled

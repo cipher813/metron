@@ -1,4 +1,4 @@
-// WatchlistCompareTable (metron-ops#123) — the Holdings page's embedded watchlist section:
+// WatchlistCompareTable (metron-ops#121) — the Holdings page's embedded watchlist section:
 // add/remove a tracked ticker, and render its Holdings metrics through the same
 // HoldingsTable column/band/sort machinery, restricted to comparison-relevant bands (no
 // Position/Value/Returns — a watchlist entry has no position).
